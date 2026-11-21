@@ -38,7 +38,8 @@ jobs:
           for role in OWNER ACCOUNTS WAREHOUSE SALESMAN RETAILER OPERATOR; do
             export "BADRI_PASS_${role}=$(openssl rand -hex 18)"
           done
-          dotnet /tmp/badri-pilot/Badri.Pilot.dll > /tmp/badri-log.txt 2>&1 &
+          cd /tmp/badri-pilot
+          dotnet Badri.Pilot.dll > /tmp/badri-log.txt 2>&1 &
           PID=$!
           trap 'cat /tmp/badri-log.txt; kill $PID || true' EXIT
           for i in {1..25}; do
