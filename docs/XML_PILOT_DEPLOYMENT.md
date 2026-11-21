@@ -142,24 +142,22 @@ multi-vendor financial ledger.
 
 ### 3.3 Deploy the feature branch
 
-The workflow file now triggers on pushes to
-`feature/azure-identity-and-deployment-foundation`; this is necessary because
-the workflow is **not** on the default `main` branch, and GitHub only exposes
-normal `workflow_dispatch` actions when the workflow file exists on `main`.
+The **single canonical Azure deployment workflow** is now `.github/workflows/feature-azure-identity-and-deployment-foundation_badritraders.yml`.
+It runs on pushes to the feature branch when `pilot/**` or that workflow file changes. It builds
+`pilot/Badri.Pilot.csproj`, packages the compiled pilot, uses the GitHub OIDC app registration
+created by Azure Deployment Center, validates the exact existing App Service, then deploys and
+checks `/health`, the browser UI, and anonymous API HTTP 401. The previous overlapping
+`pilot-xml-azure-deploy.yml` workflow was removed.
 
-After setting both the GitHub OIDC identity and App Service variables:
+**Required prerequisites:** The Portal-created OIDC app must be authorized for this branch and
+have sufficient permissions on `badritraders`. Configure the six `BADRI_PASS_*` App Settings
+privately, `ASPNETCORE_ENVIRONMENT=Production`, and
+`BADRI_XML_PATH=/home/badri-data/tradeflow.xml` before deployment. No Azure passwords
+or publishing profiles are committed to source control.
 
-1. Open GitHub **Actions → Deploy Badri XML pilot to existing Azure App Service**.
-2. Open the latest run triggered by the feature-branch push, then select
-   **Re-run failed jobs** to retry with the new environment credentials.
-   Alternatively push a new commit affecting `pilot/` or its deploy workflow.
-3. Wait for the workflow to verify the exact resource ID, .NET 10 runtime, HTTPS,
-   single instance and required secret-setting names.
-4. A **successful** workflow will ZIP-deploy the compiled .NET app and verify:
-   `/health` reports `pilot-r1`, the browser serves the UI, and anonymous
-   `/api/state` access returns HTTP 401.
-5. Only **after the workflow succeeds**, test the six independent user logins
-   using the owner's stored passwords and the browser address shown above.
+On the next feature-branch push, the workflow runs automatically. Azure Deployment Center may
+show a read-only record; always review the related GitHub Actions run for the actual status.
+A green *build* does not mean a successful Azure deployment.
 
 ### 3.4 If the deployment fails
 

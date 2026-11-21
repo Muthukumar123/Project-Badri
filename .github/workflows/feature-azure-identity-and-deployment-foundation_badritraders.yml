@@ -1,65 +1,142 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-# More GitHub Actions for Azure: https://github.com/Azure/actions
+name: Build and deploy Badri XML pilot to Azure Web App - badritraders
 
-name: Build and deploy ASP.Net Core app to Azure Web App - badritraders
-
+# The Azure Portal-generated workflow previously attempted "dotnet build" at
+# repository root and failed with MSB1003. Build the pilot project explicitly.
 on:
   push:
     branches:
-      - 'feature/azure-identity-and-deployment-foundation'
+      - feature/azure-identity-and-deployment-foundation
+    paths:
+      - 'pilot/**'
+      - '.github/workflows/feature-azure-identity-and-deployment-foundation_badritraders.yml'
   workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: badri-xml-pilot-azure
+  cancel-in-progress: false
+
+env:
+  AZURE_SUBSCRIPTION_ID: 36ed0aa4-e3dd-404b-b210-4a6e4dc38c74
+  AZURE_TENANT_ID: e40f632c-d3b5-415e-bc51-7a06c131e0dd
+  AZURE_RESOURCE_GROUP: badritradersPOC
+  AZURE_WEBAPP_NAME: badritraders
+  EXPECTED_RESOURCE_ID: /subscriptions/36ed0aa4-e3dd-404b-b210-4a6e4dc38c74/resourceGroups/badritradersPOC/providers/Microsoft.Web/sites/badritraders
 
 jobs:
   build:
+    name: Compile and package .NET 10 XML pilot
     runs-on: ubuntu-latest
-    permissions:
-      contents: read #This is required for actions/checkout
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up .NET Core
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0'
-
-      - name: Build with dotnet
-        run: dotnet build --configuration Release
-
-      - name: dotnet publish
-        run: dotnet publish -c Release -o ${{env.DOTNET_ROOT}}/myapp
-
-      - name: Upload artifact for deployment job
+          dotnet-version: '10.0.x'
+      - name: Publish the pilot project (NOT repository root)
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet publish pilot/Badri.Pilot.csproj --configuration Release --output ./publish
+          test -s publish/Badri.Pilot.dll
+          test -s publish/wwwroot/index.html
+          test -s publish/wwwroot/app.js
+      - name: Upload compiled pilot artifact
         uses: actions/upload-artifact@v4
         with:
-          name: .net-app
-          path: ${{env.DOTNET_ROOT}}/myapp
+          name: badri-xml-pilot
+          path: ./publish
+          if-no-files-found: error
+          retention-days: 3
 
   deploy:
-    runs-on: ubuntu-latest
+    name: Deploy only to existing South India App Service
     needs: build
-    permissions:
-      id-token: write #This is required for requesting the JWT
-      contents: read #This is required for actions/checkout
-
+    runs-on: ubuntu-latest
     steps:
-      - name: Download artifact from build job
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: .net-app
-      
-      - name: Login to Azure
+          name: badri-xml-pilot
+          path: ./publish
+      - name: Package publish output (not source tree)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ./publish/Badri.Pilot.dll
+          (cd publish && zip -qr ../badri-pilot.zip .)
+          test -s ./badri-pilot.zip
+      - name: Login to Azure using the Portal-created GitHub OIDC application
         uses: azure/login@v2
         with:
-          client-id: "0b055085-26ad-4dbb-817b-6ee7a6c2d52a"
-          tenant-id: "e40f632c-d3b5-415e-bc51-7a06c131e0dd"
-          subscription-id: "36ed0aa4-e3dd-404b-b210-4a6e4dc38c74"
-
-      - name: Deploy to Azure Web App
-        id: deploy-to-webapp
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: 'badritraders'
-          slot-name: 'Production'
-          package: .
-          
+          client-id: 0b055085-26ad-4dbb-817b-6ee7a6c2d52a
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Fail closed unless Azure target and pilot settings are correct
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual=$(az webapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" --query id -o tsv)
+          if [[ "${actual,,}" != "${EXPECTED_RESOURCE_ID,,}" ]]; then
+            echo "::error::App Service resource ID mismatch. Refusing deployment."
+            exit 1
+          fi
+          runtime=$(az webapp config show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" --query linuxFxVersion -o tsv)
+          if [[ "$runtime" != 'DOTNETCORE|10.0' ]]; then
+            echo "::error::Expected Linux .NET 10 runtime; found $runtime."
+            exit 1
+          fi
+          https=$(az webapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" --query httpsOnly -o tsv)
+          if [[ "${https,,}" != "true" ]]; then
+            echo "::error::HTTPS-only must be enabled before deployment."
+            exit 1
+          fi
+          settings=$(az webapp config appsettings list -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" --query '[].name' -o tsv)
+          for name in BADRI_XML_PATH BADRI_PASS_OWNER BADRI_PASS_ACCOUNTS BADRI_PASS_WAREHOUSE BADRI_PASS_SALESMAN BADRI_PASS_RETAILER BADRI_PASS_OPERATOR ASPNETCORE_ENVIRONMENT; do
+            if ! grep -Fxq "$name" <<<"$settings"; then
+              echo "::error::App Service setting $name is missing. Set passwords privately in Azure Portal."
+              exit 1
+            fi
+          done
+          mode=$(az webapp config appsettings list -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" --query "[?name=='ASPNETCORE_ENVIRONMENT'].value | [0]" -o tsv)
+          xmlpath=$(az webapp config appsettings list -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" --query "[?name=='BADRI_XML_PATH'].value | [0]" -o tsv)
+          if [[ "$mode" != "Production" || "$xmlpath" != /home/* ]]; then
+            echo "::error::Production environment and a persistent XML path under /home/ are required."
+            exit 1
+          fi
+          echo "Verified expected Web App, Linux .NET 10, HTTPS and required app-setting names."
+      - name: ZIP-deploy compiled .NET pilot (not entire repository)
+        shell: bash
+        run: |
+          az webapp deploy -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" \
+            --src-path ./badri-pilot.zip --type zip --clean true
+      - name: Verify website, pilot build and anonymous API protection
+        shell: bash
+        run: |
+          set -euo pipefail
+          host=$(az webapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" --query defaultHostName -o tsv)
+          url="https://$host"
+          ready=0
+          for i in {1..24}; do
+            if curl --max-time 15 -fsS "$url/health" -o "$RUNNER_TEMP/badri-health.json" \
+              && grep -Eq '"version"[[:space:]]*:[[:space:]]*"pilot-r1"' "$RUNNER_TEMP/badri-health.json"; then
+              ready=1
+              break
+            fi
+            sleep 10
+          done
+          if [[ "$ready" != 1 ]]; then
+            echo "::error::Deployed site did not pass /health pilot-r1 verification."
+            exit 1
+          fi
+          curl --max-time 15 -fsS "$url/" | grep -q "Badri TradeFlow"
+          code=$(curl --max-time 15 -sS -o /dev/null -w '%{http_code}' "$url/api/state")
+          if [[ "$code" != 401 ]]; then
+            echo "::error::Anonymous API access expected 401, got $code."
+            exit 1
+          fi
+          echo "### Badri XML pilot deployed and validated" >> "$GITHUB_STEP_SUMMARY"
+          echo "Website: $url" >> "$GITHUB_STEP_SUMMARY"
+          echo "Branch: feature/azure-identity-and-deployment-foundation" >> "$GITHUB_STEP_SUMMARY"
+          echo "The seeded paper values are review-only examples, NOT posted financial balances." >> "$GITHUB_STEP_SUMMARY"
