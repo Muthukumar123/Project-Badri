@@ -5,12 +5,14 @@ using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.ConfigureHttpJsonOptions(o=>o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
-builder.Services.AddDbContext<TradeDb>(o=>o.UseSqlite("Data Source=tradeflow.dev.db"));
+builder.Services.AddDbContext<TradeDb>(o=>o.UseSqlite(builder.Configuration.GetConnectionString("TradeDb") ?? "Data Source=tradeflow.dev.db"));
 builder.Services.AddCors(o=>o.AddPolicy("local", p=>p.WithOrigins("http://localhost:5173").AllowAnyHeader().AllowAnyMethod()));
 var app = builder.Build();
 // Deliberate safety gate: this development-only identity can be forged and must never be deployed.
 if (!app.Environment.IsDevelopment()) throw new InvalidOperationException("OIDC not implemented: refusing to start outside Development.");
 app.UseCors("local");
+app.UseDefaultFiles();
+app.UseStaticFiles();
 using(var scope = app.Services.CreateScope()) scope.ServiceProvider.GetRequiredService<TradeDb>().Database.EnsureCreated();
 app.MapGet("/health",()=> Results.Ok(new{status="ok", mode="DEVELOPMENT_ONLY", product="Badri TradeFlow R1"}));
 
@@ -165,6 +167,7 @@ api.MapGet("/audit",async(HttpContext h,TradeDb db)=>{
     var a=Who(h);if(!Can(a,TraderRole.Owner,TraderRole.Accounts))return Results.Forbid();
     return Results.Ok(await db.Audits.Where(x=>x.TenantId==a.TenantId).OrderByDescending(x=>x.AtUtc).Take(100).ToListAsync());
 });
+app.MapFallbackToFile("index.html");
 app.Run();
 static Actor Who(HttpContext ctx)=>(Actor)ctx.Items["actor"]!;
 static bool Can(Actor a,params TraderRole[] roles)=>roles.Contains(a.Role);
