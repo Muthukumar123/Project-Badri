@@ -19,13 +19,18 @@ public static class Seed
             r.Element("suppliers")!.Add(PilotStore.Obj("supplier",("id",PilotStore.Id()),("name",supplier)));
         foreach(var p in new[]{
             ("KOPIKO CAPPU 12X240JAR", "PA Traders", "0"),("CHOKI CHOKI 12J", "PA Traders", "0"),
+            ("CHOKI STIX 12GBX", "PA Traders", "0"),("CHOKI CHOKI XL PACK", "PA Traders", "0"),
+            ("KOPIKO CAPPU 48 PC", "PA Traders", "0"),("KOPIKO CAPPU 32 POUCH", "PA Traders", "0"),
+            ("MALKIEST CHEESE FAMILY", "PA Traders", "0"),("KOP MALKIEST DC FAMILKY", "PA Traders", "0"),
+            ("MALKIEST CAPPUCCINO", "PA Traders", "0"),("MALKIEST CHEESE FREE", "PA Traders", "0"),
             ("HARPIC 450ML","Maha Enterprises","0"),("DET ASL 60ML","Maha Enterprises","0"),
-            ("LYSOL DFC FLORAL 500ML","Maha Enterprises","0"),("GENTLE BABY SOAP 125G","Himalaya Wellness","0")})
+            ("DET ASL 125ML","Maha Enterprises","0"),("LYSOL DFC FLORAL 500ML","Maha Enterprises","0"),
+            ("GENTLE BABY SOAP 125G","Himalaya Wellness","0")})
             r.Element("products")!.Add(PilotStore.Obj("product",("id",PilotStore.Id()),("name",p.Item1),
                 ("supplier",p.Item2),("initialStock",p.Item3),("safetyStock","20"),("dailyDemand","0"),
                 ("leadDays","4"),("pack","1")));
         foreach(var sample in new[]{
-            ("Collection sheet", "Vijay - Bommidi, 12 Nov 2026", "34178", "34186", "34172", "11 rows; handwritten amount for Velmurugan uncertain (230 or 238); 6 rupee cash difference only if scope confirmed"),
+            ("Collection sheet", "Vijay - Bommidi, 12/1?/2026 (date unclear)", "34178", "34186", "34172", "11 rows; handwritten amount for Velmurugan uncertain (230 or 238); 6 rupee cash difference only if scope confirmed"),
             ("Collection sheet", "R. Santhosh - GK Road, 14 Nov 2026", "112774", "112754", "88586", "Credit lines differ by 20; cash denominations 88586; payment modes missing; HC-3000 / HC-1000"),
             ("Delivery sheet", "Santhosh - GK Road, 14 Nov 2026", "166040", "166041", "", "46 rows; 44 valued; paper marks and 17 uncertain entries; not proof of delivery"),
             ("Supplier invoice", "PA Traders A000770", "57977", "57977", "", "Credit bill; 10 lines, 27 paid units and 60 promotional free units"),
@@ -107,5 +112,18 @@ public static class Seed
             r.Element("purchases")!.Add(PilotStore.Obj("purchase",("id",PilotStore.Id()),("supplier",bill.Item1),
                 ("invoice",bill.Item2),("amount",bill.Item3),("lines",bill.Item4),("completeness",bill.Item5),
                 ("status","Review required"),("received","0"),("paid","0")));
+        var pInvoices=r.Element("purchases")!;
+        var paInvoice=pInvoices.Elements().First(x=>PilotStore.Attr(x,"invoice")=="A000770");
+        var paExpected=new (string sku,string qty)[]{
+          ("KOPIKO CAPPU 12X240JAR","10"),("CHOKI CHOKI 12J","6"),
+          ("CHOKI STIX 12GBX","2"),("CHOKI CHOKI XL PACK","1"),
+          ("KOPIKO CAPPU 48 PC","1"),("KOPIKO CAPPU 32 POUCH","1"),
+          ("MALKIEST CHEESE FAMILY","3"),("KOP MALKIEST DC FAMILKY","2"),
+          ("MALKIEST CAPPUCCINO","1"),("MALKIEST CHEESE FREE","60")};
+        foreach(var(sku,qty) in paExpected)paInvoice.Add(PilotStore.Obj("expected",("sku",sku),("qty",qty)));
+        var meInvoice=pInvoices.Elements().First(x=>PilotStore.Attr(x,"invoice")=="ME0398");
+        foreach(var(sku,qty) in new[]{("DET ASL 60ML","200"),("DET ASL 125ML","96"),
+                ("HARPIC 450ML","120"),("LYSOL DFC FLORAL 500ML","18")})
+            meInvoice.Add(PilotStore.Obj("expected",("sku",sku),("qty",qty)));
     }
 }

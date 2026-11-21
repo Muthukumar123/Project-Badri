@@ -157,6 +157,12 @@ api.MapPost("/grn",async(NewGrn req,HttpContext ctx,PilotStore s)=>await Change(
     if(PilotStore.Attr(inv,"status") is not ("Approved - pending goods receipt" or "Part received"))throw new InvalidOperationException("Approve full supplier invoice before receiving");
     var product=PilotStore.ById(root.Element("products")!,req.ProductId)??throw new InvalidOperationException("Product not found");
     if(PilotStore.Attr(inv,"supplier")!=PilotStore.Attr(product,"supplier"))throw new InvalidOperationException("Product does not belong to this supplier bill");
+    var expectedLine=inv.Elements("expected").FirstOrDefault(x=>PilotStore.Attr(x,"sku")==PilotStore.Attr(product,"name"))
+        ??throw new InvalidOperationException("Product is not present on this supplier invoice");
+    var alreadyCounted=root.Element("stock")!.Elements("movement")
+        .Where(x=>PilotStore.Attr(x,"purchaseId")==req.PurchaseId&&PilotStore.Attr(x,"productId")==req.ProductId)
+        .Sum(x=>PilotStore.Dec(x,"qty")+PilotStore.Dec(x,"quarantine"));
+    if(alreadyCounted+req.Quantity>PilotStore.Dec(expectedLine,"qty"))throw new InvalidOperationException("Received quantity exceeds supplier invoice; record an exception");
     if(req.Quantity<=0||string.IsNullOrWhiteSpace(req.Batch)||req.Damaged<0||req.Damaged>req.Quantity)throw new InvalidOperationException("Count received, damaged units and batch");
     var stock=PilotStore.Obj("movement",("id",PilotStore.Id()),("productId",req.ProductId),("product",PilotStore.Attr(product,"name")),
         ("purchaseId",req.PurchaseId),("batch",req.Batch.Trim()),("expiry",req.Expiry??""),("qty",req.Quantity-req.Damaged),
@@ -169,6 +175,16 @@ api.MapPost("/purchases/{id}/complete-grn",async(string id,HttpContext ctx,Pilot
     var row=PilotStore.ById(d.Root!.Element("purchases")!,id)??throw new InvalidOperationException("Unknown purchase");
     if(PilotStore.Attr(row,"status")!="Part received"||PilotStore.Dec(row,"received")<=0)
         throw new InvalidOperationException("First count actual received goods, then confirm receiving completion");
+    var stock=d.Root!.Element("stock")!.Elements("movement")
+        .Where(x=>PilotStore.Attr(x,"purchaseId")==id).ToList();
+    var missing=row.Elements("expected")
+        .Where(line=>{
+            var sku=PilotStore.Attr(line,"sku");
+            var received=stock.Where(m=>PilotStore.Attr(m,"product")==sku)
+              .Sum(m=>PilotStore.Dec(m,"qty")+PilotStore.Dec(m,"quarantine"));
+            return received!=PilotStore.Dec(line,"qty");
+        }).Select(x=>PilotStore.Attr(x,"sku")).ToList();
+    if(missing.Count>0)throw new InvalidOperationException("Cannot complete GRN; count missing/short items: "+string.Join(", ",missing));
     row.SetAttributeValue("status","Received");row.SetAttributeValue("grnConfirmedBy",Name(ctx));
     return Render(row);
 }));
