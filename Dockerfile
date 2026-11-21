@@ -1,6 +1,6 @@
 # Builds both UIs and API into ONE container for PRIVATE LOCAL PREVIEW ONLY.
-# ASPNETCORE_ENVIRONMENT is Production by default: the code refuses to start
-# in that environment until production authentication has been implemented.
+# ASPNETCORE_ENVIRONMENT is Production by default. Production startup requires
+# validated Entra configuration and a provisioned Azure SQL schema and membership.
 FROM node:22-alpine AS webbuild
 WORKDIR /src/web
 COPY web/package*.json ./
