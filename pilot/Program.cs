@@ -228,7 +228,7 @@ api.MapPost("/cashclose",async(NewCash req,HttpContext ctx,PilotStore s)=>await 
         ("receiptIds",string.Join(',',pending.Select(x=>PilotStore.Attr(x,"id")))),("status","Awaiting owner"));
     d.Root.Element("cashcloses")!.Add(row);return Render(row);
 }));
-api.MapPost("/cashclose/{id}/approve",async(string id,Reason req,HttpContext ctx,PilotStore s)=>await Change(ctx,s,"cash.approve",["Owner"],d=>{
+api.MapPost("/cashclose/{id}/approve",async(string id,ApprovalReason req,HttpContext ctx,PilotStore s)=>await Change(ctx,s,"cash.approve",["Owner"],d=>{
     var root=d.Root!;var row=PilotStore.ById(root.Element("cashcloses")!,id)??throw new InvalidOperationException("Unknown cash close");
     if(PilotStore.Attr(row,"status")!="Awaiting owner"||PilotStore.Dec(row,"difference")!=0&&string.IsNullOrWhiteSpace(req.Reason))throw new InvalidOperationException("Discrepancy reason required");
     var ids=PilotStore.Attr(row,"receiptIds").Split(',',StringSplitOptions.RemoveEmptyEntries);
@@ -308,7 +308,7 @@ public record POD(string Receiver,decimal Accepted);
 public record NewCollection(string BillId,decimal Amount,string Mode,string IdempotencyKey);
 public record VerifiedBank(string Reference,string ReviewerNote);
 public record NewCash(string Date,decimal Counted,string? Reason, Dictionary<int,int>? Notes);
-public record Reason(string? Reason);
+public record ApprovalReason(string? Reason);
 public record NewPayment(string PurchaseId,decimal Amount,string ExternalReference);
 public record NewReturn(string ProductId,decimal Qty,string Reason);
 public record OpenStock(decimal Quantity,string Batch);
