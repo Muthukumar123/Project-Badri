@@ -90,6 +90,27 @@ jobs:
                        WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
             >/dev/null
           echo "Configured non-secret Production environment and persistent XML path."
+      - name: Initialize missing role-specific pilot passwords securely in Azure
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Run ONLY after the resource ID has been verified. Never expose credentials
+          # in source, actions logs, stdout, artifact files or GitHub secrets.
+          actual=$(az webapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" --query id -o tsv)
+          [[ "${actual,,}" == "${EXPECTED_RESOURCE_ID,,}" ]] || { echo "::error::Resource mismatch"; exit 1; }
+          present=$(az webapp config appsettings list -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" --query '[].name' -o tsv)
+          for role in OWNER ACCOUNTS WAREHOUSE SALESMAN RETAILER OPERATOR; do
+            name="BADRI_PASS_${role}"
+            if ! grep -Fxq "$name" <<<"$present"; then
+              # 40 random hex characters; no reuse across accounts.
+              password=$(openssl rand -hex 20)
+              echo "::add-mask::${password}"
+              az webapp config appsettings set -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" --settings "${name}=${password}" >/dev/null
+              unset password
+              echo "Initialized $name privately in Azure App Service settings."
+            fi
+          done
+          echo "Read login credentials privately via Azure Portal > App Service > Environment variables."
       - name: Fail closed unless Azure target and pilot settings are correct
         shell: bash
         run: |

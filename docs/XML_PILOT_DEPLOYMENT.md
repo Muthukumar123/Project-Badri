@@ -149,10 +149,16 @@ created by Azure Deployment Center, validates the exact existing App Service, th
 checks `/health`, the browser UI, and anonymous API HTTP 401. The previous overlapping
 `pilot-xml-azure-deploy.yml` workflow was removed.
 
-**Required prerequisites:** The Portal-created OIDC app must be authorized for this branch and
-have sufficient permissions on `badritraders`. Configure the six `BADRI_PASS_*` App Settings
-privately, `ASPNETCORE_ENVIRONMENT=Production`, and
-`BADRI_XML_PATH=/home/badri-data/tradeflow.xml` before deployment. No Azure passwords
+**Required prerequisites:** The Portal-created OIDC app must be authorized for this branch
+and have sufficient permissions on `badritraders`.
+The workflow now configures the non-secret XML path / environment, then generates and securely
+stores any **missing** six `BADRI_PASS_*` passwords as App Service application settings.
+It does **not** rotate passwords that already exist. For existing seeded XML users, do not
+change the App Settings to reset the password: XML contains an independent PBKDF2 hash.
+The six pilot passwords must be retrieved privately in the Azure Portal and shared only
+with appropriate test users. They are **not** included in workflow logs, source code
+or artifacts. A previously downloaded password file is not automatically synchronized
+with Azure-generated passwords. No Azure passwords
 or publishing profiles are committed to source control.
 
 On the next feature-branch push, the workflow runs automatically. Azure Deployment Center may
