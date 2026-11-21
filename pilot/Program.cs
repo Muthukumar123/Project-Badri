@@ -149,6 +149,10 @@ api.MapPost("/documents/{id}/review",async(string id,Review req,HttpContext ctx,
 api.MapPost("/purchases/{id}/approve",async(string id,HttpContext ctx,PilotStore s)=>await Change(ctx,s,"purchase.reviewed",["Owner","Accounts"],d=>{
     var row=PilotStore.ById(d.Root!.Element("purchases")!,id)??throw new InvalidOperationException("Unknown supplier bill");
     if(PilotStore.Attr(row,"completeness")!="Complete")throw new InvalidOperationException("Missing invoice page. Cannot approve.");
+    var reviewed=d.Root!.Element("documents")!.Elements("document").Any(x=>
+        PilotStore.Attr(x,"title").Contains(PilotStore.Attr(row,"invoice"),StringComparison.OrdinalIgnoreCase)
+        &&PilotStore.Attr(x,"status")=="Verified - staging only");
+    if(!reviewed)throw new InvalidOperationException("Review supplier document and record the source check before invoice approval");
     if(PilotStore.Attr(row,"status")!="Review required")throw new InvalidOperationException("Bill already reviewed");
     row.SetAttributeValue("status","Approved - pending goods receipt");return Render(row);
 }));

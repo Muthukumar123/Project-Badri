@@ -71,3 +71,4 @@ jobs:
           assert saved['name']=='Pilot Shop'
           print('Smoke test passed: login, role, seed references, no fabricated dues, anti-CSRF, persisted retailer')
           PY
+          python3 "$GITHUB_WORKSPACE/tools/test_pilot_flows.py"
