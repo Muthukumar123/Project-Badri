@@ -1,0 +1,28 @@
+name: generate-initial-sql-migration
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  generate:
+    if: github.ref == 'refs/heads/feature/azure-identity-and-deployment-foundation'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: true}
+      - uses: actions/setup-dotnet@v4
+        with: {dotnet-version: '10.0.x'}
+      - name: Install migration tool
+        run: dotnet tool install --global dotnet-ef --version 10.0.0
+      - name: Generate EF Core 10 SQL Server migration source
+        run: dotnet ef migrations add InitialSql --project src/TradeFlow.Api --startup-project src/TradeFlow.Api --context TradeDb --output-dir Migrations
+      - name: Verify migration compiles and unit tests pass
+        run: dotnet test tests/TradeFlow.UnitTests/TradeFlow.UnitTests.csproj --configuration Release
+      - name: Commit migration on feature branch only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/TradeFlow.Api/Migrations
+          git diff --cached --quiet && exit 1
+          git commit -m 'Generate initial Azure SQL EF Core migration and snapshot'
+          git push origin HEAD:feature/azure-identity-and-deployment-foundation

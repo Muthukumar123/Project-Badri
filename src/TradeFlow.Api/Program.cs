@@ -115,8 +115,8 @@ api.MapPost("/collections",async(HttpContext h,TradeDb db,CapturePayment req)=>{
 api.MapGet("/collections",async(HttpContext h,TradeDb db)=>{
     var a=Who(h);return Results.Ok(await db.Collections.Where(x=>x.TenantId==a.TenantId).OrderByDescending(x=>x.CapturedAtUtc).Take(200).ToListAsync());
 });
-// SIMULATION ONLY. In production verify payment with bank/provider evidence; screenshot is not proof.
-api.MapPost("/collections/{id:guid}/verify-demo",async(HttpContext h,TradeDb db,Guid id,VerifyDemo req)=>{
+// SIMULATION ONLY. Never map this endpoint outside local Development.
+if (development) api.MapPost("/collections/{id:guid}/verify-demo",async(HttpContext h,TradeDb db,Guid id,VerifyDemo req)=>{
     var a=Who(h);if(!Can(a,TraderRole.Owner,TraderRole.Accounts))return Results.Forbid();
     var payment=await db.Collections.FirstOrDefaultAsync(x=>x.TenantId==a.TenantId&&x.Id==id);
     if(payment==null)return Results.NotFound();

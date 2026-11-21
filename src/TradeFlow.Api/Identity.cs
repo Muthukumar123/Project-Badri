@@ -24,8 +24,10 @@ public static class TradeIdentity
 
         var directoryId = builder.Configuration["AzureAd:TenantId"];
         var apiClientId = builder.Configuration["AzureAd:ClientId"];
-        if (!Guid.TryParse(directoryId, out var directory) || !Guid.TryParse(apiClientId, out var audience))
-            throw new InvalidOperationException("Production requires a valid AzureAd:TenantId and AzureAd:ClientId.");
+        var spaClientId = builder.Configuration["AzureAd:SpaClientId"];
+        if (!Guid.TryParse(directoryId, out var directory) || !Guid.TryParse(apiClientId, out var audience)
+            || !Guid.TryParse(spaClientId, out _))
+            throw new InvalidOperationException("Production requires valid AzureAd:TenantId, AzureAd:ClientId and AzureAd:SpaClientId.");
 
         var authority = $"https://login.microsoftonline.com/{directory:D}/v2.0";
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
