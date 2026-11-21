@@ -12,10 +12,5 @@ services:
       ASPNETCORE_URLS: "http://+:8080"
     volumes:
       - badri-preview-data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "test -d /app/wwwroot && test -f /app/wwwroot/index.html"]
-      interval: 30s
-      timeout: 5s
-      retries: 2
 volumes:
   badri-preview-data:
