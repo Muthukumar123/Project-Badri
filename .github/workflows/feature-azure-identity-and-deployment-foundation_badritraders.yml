@@ -73,6 +73,23 @@ jobs:
           client-id: 0b055085-26ad-4dbb-817b-6ee7a6c2d52a
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Configure non-secret pilot runtime settings on existing App Service
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No passwords or other confidential values are passed through source control.
+          actual=$(az webapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" --query id -o tsv)
+          if [[ "${actual,,}" != "${EXPECTED_RESOURCE_ID,,}" ]]; then
+            echo "::error::Wrong Azure App Service. Refusing to change app settings."
+            exit 1
+          fi
+          az webapp config appsettings set \
+            -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" \
+            --settings ASPNETCORE_ENVIRONMENT=Production \
+                       BADRI_XML_PATH=/home/badri-data/tradeflow.xml \
+                       WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
+            >/dev/null
+          echo "Configured non-secret Production environment and persistent XML path."
       - name: Fail closed unless Azure target and pilot settings are correct
         shell: bash
         run: |
