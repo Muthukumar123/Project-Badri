@@ -1,0 +1,31 @@
+name: preview-container-build
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - compose.preview.yml
+      - .dockerignore
+      - src/**
+      - web/**
+      - .github/workflows/container-preview-build.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-no-deploy:
+    name: Build localhost-only preview image (does NOT deploy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build integrated .NET + React image (never push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: project-badri:ci-preview
+      - name: Confirm backend production safety gate remains present
+        run: |
+          grep -F 'refusing to start outside Development' src/TradeFlow.Api/Program.cs
+          grep -F '127.0.0.1:5090:8080' compose.preview.yml

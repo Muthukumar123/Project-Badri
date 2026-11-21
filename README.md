@@ -57,3 +57,14 @@ Repository: `Muthukumar123/Project-Badri`. Source maintained on `feature/r1-coll
 4. Uploaded supplier invoice approval never posts stock; only a physical GRN may do so.
 5. Source-document totals are claimed evidence and must be reconciled with computed lines.
 6. No source paper data is treated as a confirmed live balance without opening-balances migration and owner approval.
+
+## Local single-container preview (development data only)
+
+The integrated React + ASP.NET Core image can run on your own computer without a separate frontend server:
+
+```bash
+docker compose -f compose.preview.yml up --build
+# Open http://127.0.0.1:5090
+```
+
+**Never expose this container publicly**: the API accepts forgeable `X-Dev-*` headers and deliberately fails to start with `ASPNETCORE_ENVIRONMENT=Production`. The Compose preview explicitly binds to localhost only. This is an engineering preview, not deployment of real retailer data. See [deployment readiness](docs/DEPLOYMENT.md).

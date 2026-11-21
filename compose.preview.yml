@@ -1,0 +1,21 @@
+# Local-only preview. Do not publish to a public host or bind 0.0.0.0.
+services:
+  badri-preview:
+    build: .
+    image: project-badri:local-preview
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5090:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__TradeDb: "Data Source=/data/tradeflow.dev.db"
+      ASPNETCORE_URLS: "http://+:8080"
+    volumes:
+      - badri-preview-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "test -d /app/wwwroot && test -f /app/wwwroot/index.html"]
+      interval: 30s
+      timeout: 5s
+      retries: 2
+volumes:
+  badri-preview-data:

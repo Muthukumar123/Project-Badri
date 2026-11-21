@@ -7,7 +7,7 @@ type Balance={id:string;name:string;beat:string;due:number;pending:number;unallo
 type Invoice={id:string;billNo:string;retailerId:string;amount:number};
 type Col={id:string;amount:number;mode:string;state:string;legacyBillNo?:string};
 const tenant='11111111-1111-1111-1111-111111111111'; // Synthetic developer tenant ONLY
-const API='http://localhost:5090/api/v1';
+const API=(import.meta.env.VITE_API_BASE_URL?.trim() || '')+'/api/v1';
 const labels={en:{today:'Today',collect:'Collect Money',dues:'Money to Collect',upload:'Upload Documents',settle:'Cash Handover',shop:'Retailer',amount:'Amount',bill:'Bill number',mode:'Payment mode',save:'Record Receipt',opening:'Add Retailer',invoice:'Supplier Invoice PDF',delivery:'Delivery Sheet PDF',collection:'Collection Sheet PDF'},ta:{today:'இன்று',collect:'வசூல் பதிவு',dues:'வர வேண்டிய பணம்',upload:'ஆவணம் பதிவேற்றம்',settle:'பண ஒப்படைப்பு',shop:'கடை',amount:'தொகை',bill:'பில் எண்',mode:'பணம் செலுத்தும் முறை',save:'ரசீது பதிவு',opening:'கடை சேர்க்க',invoice:'சப்ளையர் பில்',delivery:'டெலிவரி சீட்டு',collection:'வசூல் சீட்டு'}};
 async function request<T>(path:string,method='GET',body?:unknown){
  const r=await fetch(API+path,{method,headers:{'content-type':'application/json','X-Dev-Tenant':tenant,'X-Dev-User':'pilot-owner','X-Dev-Role':'Owner',...(method==='POST'?{'Idempotency-Key':crypto.randomUUID()}:{})},body:body?JSON.stringify(body):undefined});
