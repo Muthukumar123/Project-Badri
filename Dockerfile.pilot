@@ -1,0 +1,15 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY pilot/Badri.Pilot.csproj pilot/
+RUN dotnet restore pilot/Badri.Pilot.csproj
+COPY pilot/ pilot/
+RUN dotnet publish pilot/Badri.Pilot.csproj --configuration Release --no-restore --output /app
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
+WORKDIR /app
+COPY --from=build /app/ ./
+RUN mkdir -p /data && chown -R app:app /data /app
+USER app
+ENV ASPNETCORE_URLS=http://+:8080
+ENV BADRI_XML_PATH=/data/tradeflow.xml
+EXPOSE 8080
+ENTRYPOINT ["dotnet", "Badri.Pilot.dll"]

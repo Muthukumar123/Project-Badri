@@ -1,0 +1,18 @@
+# LOCAL TEST ONLY. This binding is explicitly localhost-only.
+services:
+  badri-pilot:
+    build:
+      context: .
+      dockerfile: Dockerfile.pilot
+    ports:
+      - "127.0.0.1:5091:8080"
+    env_file:
+      - .env.pilot
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      BADRI_XML_PATH: /data/tradeflow.xml
+    volumes:
+      - badri-pilot-xml:/data
+volumes:
+  badri-pilot-xml:

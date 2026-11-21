@@ -1,0 +1,66 @@
+name: Deploy Badri pilot feature branch to Azure App Service (manual, gated)
+on:
+  workflow_dispatch:
+    inputs:
+      resource_group:
+        description: 'Existing Azure resource group'
+        type: string
+        required: true
+      app_name:
+        description: 'Existing .NET 10 Linux Azure Web App name'
+        type: string
+        required: true
+      confirm_data:
+        description: 'Type REDACTED_PILOT_ONLY (do not deploy customer originals)'
+        type: string
+        required: true
+permissions:
+  id-token: write
+  contents: read
+concurrency:
+  group: badri-xml-pilot-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: ${{ github.ref == 'refs/heads/feature/azure-identity-and-deployment-foundation' && inputs.confirm_data == 'REDACTED_PILOT_ONLY' }}
+    runs-on: ubuntu-latest
+    environment: azure-pilot
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: {dotnet-version: '10.0.x'}
+      - name: Compile
+        run: dotnet publish pilot/Badri.Pilot.csproj -c Release -o publish
+      - name: Package application
+        run: cd publish && zip -qr ../badri-pilot.zip .
+      - name: Azure workload identity login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: e40f632c-d3b5-415e-bc51-7a06c131e0dd
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Fail if pilot configuration missing
+        env:
+          RG: ${{ inputs.resource_group }}
+          APP: ${{ inputs.app_name }}
+        run: |
+          set -euo pipefail
+          az webapp show --resource-group "$RG" --name "$APP" --query 'state' -o tsv
+          az webapp update --resource-group "$RG" --name "$APP" --https-only true >/dev/null
+          # Inspect app-setting NAMES only; never print values or account secrets.
+          settings=$(az webapp config appsettings list --resource-group "$RG" --name "$APP" --query '[].name' -o tsv)
+          for required in BADRI_XML_PATH BADRI_PASS_OWNER BADRI_PASS_ACCOUNTS BADRI_PASS_WAREHOUSE BADRI_PASS_SALESMAN BADRI_PASS_RETAILER BADRI_PASS_OPERATOR; do
+            echo "$settings" | grep -Fxq "$required" || { echo "Missing Azure App Setting $required"; exit 1; }
+          done
+      - name: Deploy .NET Pilot ZIP to existing App Service
+        env:
+          RG: ${{ inputs.resource_group }}
+          APP: ${{ inputs.app_name }}
+        run: az webapp deploy --resource-group "$RG" --name "$APP" --src-path badri-pilot.zip --type zip --clean true
+      - name: Print web app URL only after successful deploy
+        env:
+          RG: ${{ inputs.resource_group }}
+          APP: ${{ inputs.app_name }}
+        run: |
+          host=$(az webapp show -g "$RG" -n "$APP" --query defaultHostName -o tsv)
+          echo "Pilot: https://$host" >> "$GITHUB_STEP_SUMMARY"
