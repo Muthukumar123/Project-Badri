@@ -32,36 +32,147 @@ docker compose -f compose.pilot.yml up --build
 
 The generator creates six independent passwords. The names are `owner.badri`, `accounts.badri`, `warehouse.badri`, `salesman.santhosh`, `retailer.demo`, `operator.demo`.
 
-## 3. What is needed for Azure PaaS deployment
+## 3. Existing Azure App Service — exact destination (confirmed by owner)
 
-Your directory (`Entra tenant`) ID: `e40f632c-d3b5-415e-bc51-7a06c131e0dd`. **This does not grant deployment rights or identify the Azure subscription.**
+| Setting | Existing resource |
+|---|---|
+| Subscription | `Azure subscription 1` |
+| Subscription ID | `36ed0aa4-e3dd-404b-b210-4a6e4dc38c74` |
+| Directory (Microsoft Entra) ID | `e40f632c-d3b5-415e-bc51-7a06c131e0dd` |
+| Resource group | `badritradersPOC` |
+| Linux App Service | `badritraders` |
+| Azure region | **South India** |
+| Runtime | **DOTNETCORE / .NET 10** |
+| Plan | **Free F1** — temporary demo only, idle/cold-start and CPU limits |
+| Instances | **1** (required for XML) |
+| HTTPS only | **Enabled** |
+| Expected host | `https://badritraders-hga6f6amdubqbhfb.southindia-01.azurewebsites.net` |
+| Deploy source | `feature/azure-identity-and-deployment-foundation` |
 
-The prepared target is **Azure App Service (Linux, .NET 10, B1 or higher)** in an agreed Indian region. The XML file is written to `/home/badri-data/tradeflow.xml` with persistent App Service storage, single app instance, no staging slots, no horizontal scaling, and explicit HTTPS-only. This is short-lived pilot storage, not a recommended financial system of record.
+**Having a running Azure App Service does NOT mean this pilot code has been deployed.**
+Only the GitHub Actions **Deploy Badri XML pilot to existing Azure App Service** workflow
+can claim deployment success after Azure login, ZIP deployment and HTTPS/API smoke checks succeed.
 
-The Azure account owner must identify:
-1. Azure **subscription ID**, resource group, App Service name and region.
-2. GitHub Actions workload identity/Entra **application registration** with federated credential for environment `azure-pilot` and least-privilege role assignment.
-3. GitHub environment secrets `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID` (directory ID is in the workflow and is not a password).
-4. **Six unique 14+ character passwords**, set **in Azure App Service app settings**, not committed to Git and not pasted into the chat.
+**Do not upgrade F1 or provision any extra Azure resource without owner approval.**
+This existing code-hosted App Service is the intended target; it is **not** a Docker container deployment.
 
-### Initial manual provisioning (Azure CLI, run by Azure subscription owner)
+### 3.1 Create GitHub-to-Azure deployment identity (once, owner/administrator)
+
+From Azure Cloud Shell (Bash), using an account permitted to create app registrations and
+grant role assignments:
 
 ```bash
-az login --tenant e40f632c-d3b5-415e-bc51-7a06c131e0dd
-az account list -o table
-az account set --subscription '<YOUR_SUBSCRIPTION_ID>'
+set -euo pipefail
+SUB=36ed0aa4-e3dd-404b-b210-4a6e4dc38c74
+RG=badritradersPOC
+APP=badritraders
+DIRECTORY=e40f632c-d3b5-415e-bc51-7a06c131e0dd
+az login --tenant "$DIRECTORY"
+az account set --subscription "$SUB"
+AZURE_RESOURCE_ID=$(az webapp show -g "$RG" -n "$APP" --query id -o tsv)
 
-# Choose globally unique app name and an existing resource group or create one.
-az group create --name rg-badri-pilot --location centralindia
-az appservice plan create --name plan-badri-pilot --resource-group rg-badri-pilot --location centralindia --is-linux --sku B1
-az webapp create --resource-group rg-badri-pilot --plan plan-badri-pilot --name '<GLOBALLY_UNIQUE_WEBAPP_NAME>' --runtime 'DOTNETCORE:10.0'
-az webapp update --resource-group rg-badri-pilot --name '<GLOBALLY_UNIQUE_WEBAPP_NAME>' --https-only true
-az webapp config appsettings set --resource-group rg-badri-pilot --name '<GLOBALLY_UNIQUE_WEBAPP_NAME>' --settings BADRI_XML_PATH=/home/badri-data/tradeflow.xml WEBSITES_ENABLE_APP_SERVICE_STORAGE=true ASPNETCORE_ENVIRONMENT=Production
-# Set BADRI_PASS_* settings in the Azure Portal or Key Vault references, without printing passwords in a shell command.
-# Keep the App Service plan at ONE instance. Do not configure scale-out or slot swaps with XML state.
+# Create a dedicated identity for this pilot, NOT personal credentials:
+CLIENT_ID=$(az ad app create --display-name 'Project-Badri GitHub Pilot Deployer' --query appId -o tsv)
+az ad sp create --id "$CLIENT_ID" >/dev/null
+OBJECT_ID=$(az ad sp show --id "$CLIENT_ID" --query id -o tsv)
+
+# Scope deployment rights ONLY to the existing target web app:
+az role assignment create --assignee-object-id "$OBJECT_ID" \
+  --assignee-principal-type ServicePrincipal --role 'Website Contributor' \
+  --scope "$AZURE_RESOURCE_ID"
+
+# Federated trust restricts the identity to GitHub's environment-scoped workflow:
+cat >/tmp/badri-gh-federation.json <<'JSON'
+{
+  "name": "badri-gh-azure-pilot",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:Muthukumar123/Project-Badri:environment:azure-pilot",
+  "audiences": ["api://AzureADTokenExchange"]
+}
+JSON
+az ad app federated-credential create --id "$CLIENT_ID" \
+  --parameters /tmp/badri-gh-federation.json
+echo "GitHub environment secret AZURE_CLIENT_ID = $CLIENT_ID"
 ```
 
-Then configure GitHub environment `azure-pilot` and workload federation. In Actions, manually run **Deploy Badri pilot feature branch to Azure App Service** choosing the feature branch, resource group and app name. The workflow checks app-setting names before uploading a compiled ZIP. Do not enable auto-deploy to production from `main`.
+The client ID is not a password. Do not create or share a client secret.
+
+In GitHub repository **Settings → Environments**, create `azure-pilot` and set its
+secret `AZURE_CLIENT_ID` to the printed **application client ID**. Restrict the
+environment to the feature branch; add required reviewer approval where available.
+
+### 3.2 Configure App Service application settings (once, owner)
+
+In the Azure Portal: **badritraders → Settings → Environment variables → App settings**:
+
+| App Setting | Value / setup |
+|---|---|
+| `BADRI_XML_PATH` | `/home/badri-data/tradeflow.xml` |
+| `ASPNETCORE_ENVIRONMENT` | `Production` |
+| `WEBSITES_ENABLE_APP_SERVICE_STORAGE` | `true` (persist `/home` for demo; verify restart) |
+| `BADRI_PASS_OWNER` | One random unique password with at least 14 characters |
+| `BADRI_PASS_ACCOUNTS` | A different random unique password |
+| `BADRI_PASS_WAREHOUSE` | A different random unique password |
+| `BADRI_PASS_SALESMAN` | A different random unique password |
+| `BADRI_PASS_RETAILER` | A different random unique password |
+| `BADRI_PASS_OPERATOR` | A different random unique password |
+
+**Do not commit, paste into chat or expose these six passwords.** Store them
+in a password manager and share individual credentials privately with testers.
+The pilot hashes passwords with PBKDF2 inside XML on first launch.
+**Changing an App Setting after initial launch does not reset an existing XML password hash;**
+password rotation needs a deliberate reset mechanism and should not be improvised.
+
+The six account names are:
+
+| User | Role |
+|---|---|
+| `owner.badri` | Business owner |
+| `accounts.badri` | Purchase and accounts |
+| `warehouse.badri` | Warehouse |
+| `salesman.santhosh` | Salesman/delivery |
+| `retailer.demo` | Retailer (restricted demo shop) |
+| `operator.demo` | SaaS operator (metadata only) |
+
+**Free F1 is not production hosting**: no Always On, shared CPU/memory quota,
+possible cold starts, no deployment slots, and no managed disaster recovery.
+Use only synthetic/testing transactions and redacted historical excerpts.
+The XML file is a disposable single-instance POC database, not a supported
+multi-vendor financial ledger.
+
+### 3.3 Deploy the feature branch
+
+The workflow file now triggers on pushes to
+`feature/azure-identity-and-deployment-foundation`; this is necessary because
+the workflow is **not** on the default `main` branch, and GitHub only exposes
+normal `workflow_dispatch` actions when the workflow file exists on `main`.
+
+After setting both the GitHub OIDC identity and App Service variables:
+
+1. Open GitHub **Actions → Deploy Badri XML pilot to existing Azure App Service**.
+2. Open the latest run triggered by the feature-branch push, then select
+   **Re-run failed jobs** to retry with the new environment credentials.
+   Alternatively push a new commit affecting `pilot/` or its deploy workflow.
+3. Wait for the workflow to verify the exact resource ID, .NET 10 runtime, HTTPS,
+   single instance and required secret-setting names.
+4. A **successful** workflow will ZIP-deploy the compiled .NET app and verify:
+   `/health` reports `pilot-r1`, the browser serves the UI, and anonymous
+   `/api/state` access returns HTTP 401.
+5. Only **after the workflow succeeds**, test the six independent user logins
+   using the owner's stored passwords and the browser address shown above.
+
+### 3.4 If the deployment fails
+
+| GitHub Actions failure | Fix |
+|---|---|
+| Missing `AZURE_CLIENT_ID` | Add the GitHub environment secret in `azure-pilot` |
+| OIDC/AADSTS error | Confirm client ID, directory, federated subject, and app's role assignment |
+| Access denied / 403 from Azure API | Grant resource-scoped Website Contributor role to the service principal |
+| Missing `BADRI_PASS_*` | Set six different passwords directly in Azure App Settings |
+| Wrong runtime/instance count | Do not change without review; target requires `DOTNETCORE|10.0` and one instance |
+| App Service ZIP deployment problem | Check SCM/Deployment Center logs and App Service F1 resource limits |
+| Startup failure | Check Azure App Service Log Stream without exposing secrets |
+| Health/UI check fails | Application did not start correctly; inspect `/health` and startup logs |
 
 ### Important deployment limitations
 
