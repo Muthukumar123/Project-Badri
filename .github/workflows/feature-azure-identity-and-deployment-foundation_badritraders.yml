@@ -56,6 +56,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: badri-xml-pilot
@@ -147,8 +148,11 @@ jobs:
       - name: ZIP-deploy compiled .NET pilot (not entire repository)
         shell: bash
         run: |
+          # Kudu/OneDeploy already succeeded, but Azure CLI runtime tracking misreported
+          # a failure after a transient warmup retry. An explicit /health + role check
+          # below is the authoritative application readiness gate.
           az webapp deploy -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" \
-            --src-path ./badri-pilot.zip --type zip --clean true
+            --src-path ./badri-pilot.zip --type zip --clean true --track-status false
       - name: Verify website, pilot build and anonymous API protection
         shell: bash
         run: |
@@ -178,3 +182,6 @@ jobs:
           echo "Website: $url" >> "$GITHUB_STEP_SUMMARY"
           echo "Branch: feature/azure-identity-and-deployment-foundation" >> "$GITHUB_STEP_SUMMARY"
           echo "The seeded paper values are review-only examples, NOT posted financial balances." >> "$GITHUB_STEP_SUMMARY"
+      - name: Read-only live verification of six password-protected role logins
+        shell: bash
+        run: python3 tools/check_live_pilot.py
