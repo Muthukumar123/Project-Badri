@@ -91,3 +91,10 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 .simple-details[open] summary{border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:14px}
 .simple-details .forms{margin-top:12px}
 @media(max-width:600px){.simple-details{padding:13px}}
+
+/* R2.1: owner-access management stays behind More instead of crowding daily work. */
+.team-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.team-columns .simple-details{margin:8px 0;min-width:0}
+.team-columns label{display:block;min-width:0}
+.team-columns input[type=password]{font-family:inherit}
+@media(max-width:800px){.team-columns{grid-template-columns:1fr}.team-columns .simple-details{margin:5px 0}}

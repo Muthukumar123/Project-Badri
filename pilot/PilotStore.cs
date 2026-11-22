@@ -38,7 +38,7 @@ public sealed class PilotStore
         doc.Save(temp, SaveOptions.None);
         File.Move(temp, file, true);
     }
-    static string HashPassword(string password)
+    public static string HashPassword(string password)
     {
         var salt = RandomNumberGenerator.GetBytes(16);
         var hash = Rfc2898DeriveBytes.Pbkdf2(password, salt, 310_000, HashAlgorithmName.SHA256, 32);
@@ -109,10 +109,34 @@ public sealed class PilotStore
                 changed = true;
             }
         }
-        var active = new HashSet<string>(accounts.Select(x=>x.user),StringComparer.Ordinal);
-        foreach (var obsolete in users.Elements("user").Where(x=>!active.Contains(Attr(x,"name"))).ToList())
+        // Keep all individually provisioned accounts; remove only obsolete sample logins.
+        // Formerly this deleted EVERY non-demo account on restart.
+        var deprecated = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "owner.badri", "salesman.santhosh", "retailer.demo",
+            "accounts.badri", "warehouse.badri", "operator.demo"
+        };
+        foreach (var obsolete in users.Elements("user")
+            .Where(x=>deprecated.Contains(Attr(x,"name"))).ToList())
         {
             obsolete.Remove(); changed = true;
+        }
+        var defaultRetailer=users.Elements("user").FirstOrDefault(x=>Attr(x,"name")=="retailer");
+        if(defaultRetailer is not null && string.IsNullOrWhiteSpace(Attr(defaultRetailer,"retailerId")))
+        {
+            var shop=Group("retailers").Elements("retailer")
+                .FirstOrDefault(x=>Attr(x,"name")=="Kumar Maligai");
+            if(shop is not null)
+            {
+                defaultRetailer.SetAttributeValue("retailerId",Attr(shop,"id"));
+                changed=true;
+            }
+        }
+        var defaultSalesperson=users.Elements("user").FirstOrDefault(x=>Attr(x,"name")=="salesperson");
+        if(defaultSalesperson is not null && string.IsNullOrWhiteSpace(Attr(defaultSalesperson,"beat")))
+        {
+            defaultSalesperson.SetAttributeValue("beat","All");
+            changed=true;
         }
         if (changed)
         {
@@ -128,13 +152,16 @@ public sealed class PilotStore
     {
         var user=d.Root?.Element("users")?.Elements("user")
             .FirstOrDefault(x=>Attr(x,"name")==username);
-        if(user is null)return "";
+        if(user is null||Attr(user,"status")=="Disabled")return "";
         var value=Attr(user,"hash");
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
     });
     public Task<string> RoleForUser(string username) => Read(d=>
-        Attr(d.Root?.Element("users")?.Elements("user")
-            .FirstOrDefault(x=>Attr(x,"name")==username),"role"));
+    {
+        var user=d.Root?.Element("users")?.Elements("user")
+            .FirstOrDefault(x=>Attr(x,"name")==username);
+        return Attr(user,"status")=="Disabled"?"":Attr(user,"role");
+    });
     public XElement Group(string group) => doc.Root!.Element(group) ?? throw new InvalidOperationException("Missing XML collection: "+group);
     public static string Attr(XElement? node,string name) => node?.Attribute(name)?.Value ?? "";
     public static decimal Dec(XElement? node,string name) => decimal.TryParse(Attr(node,name),NumberStyles.Number,CultureInfo.InvariantCulture,out var v)?v:0m;
@@ -169,6 +196,7 @@ public sealed class PilotStore
     }
     public Task<(string role,bool ok)> CheckPassword(string user,string password) => Read(d => {
         var found=d.Root!.Element("users")!.Elements("user").FirstOrDefault(x => Attr(x,"name")==user);
-        return (Attr(found,"role"),found is not null && Verify(password,Attr(found,"hash")));
+        return (Attr(found,"role"),found is not null && Attr(found,"status")!="Disabled"
+            && Verify(password,Attr(found,"hash")));
     });
 }

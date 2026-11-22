@@ -39,7 +39,8 @@ builder.Services.AddAuthorization();
 builder.Services.AddRateLimiter(options=>{
     options.RejectionStatusCode=429;
     options.AddPolicy("login",ctx=>RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString()??"unknown",_=>
-        new FixedWindowRateLimiterOptions{PermitLimit=7,Window=TimeSpan.FromMinutes(2),QueueLimit=0}));
+        new FixedWindowRateLimiterOptions{PermitLimit=builder.Environment.IsDevelopment()?40:7,
+            Window=TimeSpan.FromMinutes(2),QueueLimit=0}));
 });
 builder.WebHost.ConfigureKestrel(o=>o.Limits.MaxRequestBodySize=12*1024*1024);
 var app=builder.Build();
@@ -83,15 +84,18 @@ api.MapGet("/state",async(HttpContext c,PilotStore s)=>await s.Read<IResult>(d=>
     var receipts=Rows(root,"collections");var deliveries=Rows(root,"deliveries");
     var cash=Rows(root,"cashcloses");var payments=Rows(root,"payments");var returns=Rows(root,"returns");
     var supplier=Rows(root,"suppliers");var orders=Rows(root,"orders");
+    var users=Rows(root,"users");
+    var current=users.FirstOrDefault(x=>Get(x,"name")==Name(c));
     var due=bills.Sum(x=>Value(x,"amount"))-receipts.Where(x=>Get(x,"status")=="Cleared"&&Get(x,"billId")!="").Sum(x=>Value(x,"amount"));
     var pending=receipts.Where(x=>Get(x,"status")!="Cleared").Sum(x=>Value(x,"amount"));
     var payables=purchases.Where(x=>Get(x,"status")=="Received"||Get(x,"status")=="Part received")
         .Sum(x=>Value(x,"amount")-Value(x,"paid"));
     var totals=new{receivable=due,pendingReceipts=pending,supplierPayables=payables,documentReviews=docs.Count(x=>Get(x,"status")=="Review required"&&!string.IsNullOrWhiteSpace(Get(x,"path"))),stockUnits=products.Sum(x=>StockQty(stock,Get(x,"id")))};
     if(role=="Retailer"){
-        // This R1 retailer identity is intentionally scoped to Kumar Maligai only.
-        // Future multi-retailer rollout requires separate retailer accounts & memberships.
-        var mine=shops.FirstOrDefault(x=>Get(x,"name")=="Kumar Maligai");var id=Get(mine,"id");
+        // Identity -> retailer ID is derived from persisted account membership, never
+        // from user-provided shop names, request IDs, or the page's selected retailer.
+        var id=Get(current,"retailerId");
+        var mine=shops.FirstOrDefault(x=>Get(x,"id")==id);
         var myBills=bills.Where(x=>Get(x,"retailerId")==id).ToList();
         var myReceipts=receipts.Where(x=>Get(x,"retailerId")==id).ToList();
         var myDue=myBills.Sum(x=>Value(x,"amount"))
@@ -104,21 +108,92 @@ api.MapGet("/state",async(HttpContext c,PilotStore s)=>await s.Read<IResult>(d=>
             bills=myBills,deliveries=deliveries.Where(x=>Get(x,"retailerId")==id),
             collections=myReceipts});
     }
-    if(role=="Salesperson")return Results.Ok(new{role,totals=new{
-        assignedDeliveries=deliveries.Count(x=>Get(x,"status")=="Dispatched"),
-        pendingCash=receipts.Where(x=>Get(x,"status")=="Cash pending handover"&&Get(x,"by")==Name(c))
-            .Sum(x=>Value(x,"amount")),
-        pendingOrders=orders.Count(x=>Get(x,"status")=="New")},
-        retailers=shops,products=products.Select(x=>new{id=Get(x,"id"),name=Get(x,"name")}),
-        orders,bills,deliveries,
-        documents=docs.Where(x=>Get(x,"uploadedBy")==Name(c)&&Get(x,"type")!="Supplier invoice"),
-        collections=receipts.Where(x=>Get(x,"by")==Name(c)),
-        cashcloses=cash.Where(x=>Get(x,"by")==Name(c))});
+    if(role=="Salesperson"){
+        var assignedBeat=Get(current,"beat");
+        var assignedShops=shops.Where(x=>assignedBeat=="All"||Get(x,"beat")==assignedBeat).ToList();
+        var ids=assignedShops.Select(x=>Get(x,"id")).ToHashSet(StringComparer.Ordinal);
+        var assignedBills=bills.Where(x=>ids.Contains(Get(x,"retailerId"))).ToList();
+        var assignedOrders=orders.Where(x=>ids.Contains(Get(x,"retailerId"))).ToList();
+        var assignedDeliveries=deliveries.Where(x=>ids.Contains(Get(x,"retailerId"))).ToList();
+        return Results.Ok(new{role,beat=assignedBeat,totals=new{
+            assignedDeliveries=assignedDeliveries.Count(x=>Get(x,"status")=="Dispatched"),
+            pendingCash=receipts.Where(x=>Get(x,"status")=="Cash pending handover"&&Get(x,"by")==Name(c))
+                .Sum(x=>Value(x,"amount")),
+            pendingOrders=assignedOrders.Count(x=>Get(x,"status")=="New")},
+            retailers=assignedShops,products=products.Select(x=>new{id=Get(x,"id"),name=Get(x,"name")}),
+            orders=assignedOrders,bills=assignedBills,deliveries=assignedDeliveries,
+            documents=docs.Where(x=>Get(x,"uploadedBy")==Name(c)&&Get(x,"type")!="Supplier invoice"),
+            collections=receipts.Where(x=>Get(x,"by")==Name(c)),
+            cashcloses=cash.Where(x=>Get(x,"by")==Name(c))});
+    }
     return Results.Ok(new{role,totals,retailers=shops,suppliers=supplier,products,documents=docs,purchases,stock,bills,
         orders, deliveries,collections=receipts,cashcloses=cash,payments,returns,
+        accounts=users.Where(x=>Get(x,"role") is "Salesperson" or "Retailer")
+            .Select(x=>new{username=Get(x,"name"),role=Get(x,"role"),retailerId=Get(x,"retailerId"),
+                beat=Get(x,"beat"),status=Get(x,"status")=="Disabled"?"Disabled":"Active"}).ToList(),
+        aging=Aging(root),
         audit=Rows(root,"audit").TakeLast(100).Reverse()});
 }));
 
+
+// Owner maintains many individual accounts within the same three role types.
+// Temporary passwords are typed directly into the authenticated owner form, hashed
+// with PBKDF2, never returned to the browser, stored in logs or committed to Git.
+api.MapPost("/accounts",async(NewAccount req,HttpContext ctx,PilotStore store)=>
+    await Change(ctx,store,"account.create",["Owner"],d=>{
+    var username=(req.Username??"").Trim().ToLowerInvariant();
+    if(!System.Text.RegularExpressions.Regex.IsMatch(username,@"^[a-z][a-z0-9._-]{2,39}$")
+        ||username is "owner" or "salesperson" or "retailer")
+        throw new InvalidOperationException("Username must be 3–40 lowercase letters, digits, dots, underscores or hyphens; built-in accounts are reserved.");
+    if(req.Role is not ("Salesperson" or "Retailer"))
+        throw new InvalidOperationException("Choose Salesperson or Retailer. Owner is managed in Azure Portal.");
+    if(string.IsNullOrWhiteSpace(req.Password)||req.Password.Length<14||req.Password.Length>256)
+        throw new InvalidOperationException("Set a private 14–256 character password.");
+    var root=d.Root!;var accounts=root.Element("users")!;
+    if(accounts.Elements("user").Any(x=>PilotStore.Attr(x,"name")==username))
+        throw new InvalidOperationException("Username already exists. Reset the password in account management.");
+    string retailerId="";string beat="";
+    if(req.Role=="Retailer"){
+        retailerId=(req.RetailerId??"").Trim();
+        if(PilotStore.ById(root.Element("retailers")!,retailerId)==null)
+            throw new InvalidOperationException("Choose a valid retailer before creating its login.");
+    } else {
+        beat=(req.Beat??"").Trim();
+        if(beat!="All"&&!root.Element("retailers")!.Elements("retailer")
+            .Any(x=>PilotStore.Attr(x,"beat")==beat))
+            throw new InvalidOperationException("Choose a beat with registered retailer shops.");
+    }
+    var item=PilotStore.Obj("user",("name",username),("role",req.Role),
+        ("tenant",PilotStore.DemoTenant),("retailerId",retailerId),("beat",beat),
+        ("status","Active"),("hash",PilotStore.HashPassword(req.Password)));
+    accounts.Add(item);
+    return new{username,role=req.Role,retailerId,beat,status="Active"};
+}));
+api.MapPost("/accounts/{username}/disable",async(string username,HttpContext ctx,PilotStore store)=>
+    await Change(ctx,store,"account.disable",["Owner"],d=>{
+    username=username.Trim().ToLowerInvariant();
+    if(username is "owner" or "retailer" or "salesperson")
+        throw new InvalidOperationException("Built-in pilot account cannot be disabled here; change its password in Azure Portal.");
+    var item=d.Root!.Element("users")!.Elements("user")
+        .FirstOrDefault(x=>PilotStore.Attr(x,"name")==username)
+        ??throw new InvalidOperationException("Account not found.");
+    item.SetAttributeValue("status","Disabled");
+    return new{username,status="Disabled"};
+}));
+api.MapPost("/accounts/{username}/password",async(string username,ResetPassword req,HttpContext ctx,PilotStore store)=>
+    await Change(ctx,store,"account.password-reset",["Owner"],d=>{
+    username=username.Trim().ToLowerInvariant();
+    if(username is "owner" or "retailer" or "salesperson")
+        throw new InvalidOperationException("Built-in passwords must be changed in Azure Portal.");
+    if(string.IsNullOrWhiteSpace(req.Password)||req.Password.Length<14||req.Password.Length>256)
+        throw new InvalidOperationException("Use a 14–256 character password.");
+    var item=d.Root!.Element("users")!.Elements("user")
+        .FirstOrDefault(x=>PilotStore.Attr(x,"name")==username)
+        ??throw new InvalidOperationException("Account not found.");
+    item.SetAttributeValue("hash",PilotStore.HashPassword(req.Password));
+    item.SetAttributeValue("status","Active");
+    return new{username,status="Active"};
+}));
 
 // Order request is a quotation/stock planning request, NOT a posted bill,
 // stock dispatch, delivery acknowledgment, cash receipt or payable.
@@ -126,9 +201,13 @@ api.MapPost("/orders",async(NewOrder req,HttpContext ctx,PilotStore s)=>await Ch
     "order.request",["Owner","Salesperson","Retailer"],d=>{
     var root=d.Root!;
     var shop=Role(ctx)=="Retailer"
-        ? root.Element("retailers")!.Elements("retailer").FirstOrDefault(x=>PilotStore.Attr(x,"name")=="Kumar Maligai")
+        ? PilotStore.ById(root.Element("retailers")!,
+            PilotStore.Attr(root.Element("users")!.Elements("user")
+                .FirstOrDefault(x=>PilotStore.Attr(x,"name")==Name(ctx)),"retailerId"))
         : PilotStore.ById(root.Element("retailers")!,req.RetailerId??"");
     if(shop is null)throw new InvalidOperationException("Select a valid retailer.");
+    if(!CanAccessShop(root,ctx,PilotStore.Attr(shop,"id")))
+        throw new InvalidOperationException("This retailer is not assigned to your account or beat.");
     var product=PilotStore.ById(root.Element("products")!,req.ProductId);
     if(product is null||req.Quantity<=0||req.Quantity>10000||req.Quantity!=decimal.Truncate(req.Quantity))
         throw new InvalidOperationException("Select a product and whole-number quantity between 1 and 10,000.");
@@ -166,6 +245,8 @@ api.MapPost("/sales-bills",async(NewBill req,HttpContext ctx,PilotStore s)=>awai
     if(retailer==null)throw new InvalidOperationException("Unknown retailer");
     if(req.Amount<=0||req.Amount!=decimal.Round(req.Amount,2)||string.IsNullOrWhiteSpace(req.BillNo))throw new InvalidOperationException("Valid bill amount and number required");
     if(rs.Element("bills")!.Elements().Any(x=>PilotStore.Attr(x,"billNo")==req.BillNo))throw new InvalidOperationException("Duplicate bill number");
+    if(!DateOnly.TryParseExact(req.DueDate,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out _))
+        throw new InvalidOperationException("Enter an ISO due date (YYYY-MM-DD).");
     var linkedOrder=string.IsNullOrWhiteSpace(req.OrderId)?null:
         PilotStore.ById(rs.Element("orders")!,req.OrderId);
     if(!string.IsNullOrWhiteSpace(req.OrderId) &&
@@ -192,17 +273,30 @@ api.MapPost("/documents/upload",async(HttpContext ctx,PilotStore s,IWebHostEnvir
         ext==".png"?header.Take(8).SequenceEqual(new byte[]{137,80,78,71,13,10,26,10}):
         header[0]==255&&header[1]==216&&header[2]==255;
     if(!valid)return Results.BadRequest(new{error="Uploaded file does not match its extension"});
+    // Fingerprint exact original bytes, independent of filename; atomic duplicate check
+    // is performed inside the XML transaction rather than only before it.
+    var sha256=Convert.ToHexString(await SHA256.HashDataAsync(input));
+    input.Position=0;
     var folder=Path.Combine(Path.GetDirectoryName(Path.GetFullPath(config["BADRI_XML_PATH"]??Path.Combine(env.ContentRootPath,"pilot-data.xml")))!,"uploads");
     Directory.CreateDirectory(folder);var id=PilotStore.Id();var stored=Path.Combine(folder,id+ext);
-    try{await using(var output=File.Create(stored))await input.CopyToAsync(output);
-        return await Change(ctx,s,"document.upload",["Owner","Salesperson"],d=>{
+    try{
+        await using(var output=File.Create(stored))await input.CopyToAsync(output);
+        var response=await s.Write(Name(ctx),"document.upload",d=>{
             var group=d.Root!.Element("documents")!;
+            if(group.Elements("document").Any(x=>PilotStore.Attr(x,"sha256")==sha256))
+                throw new InvalidOperationException("Identical source file already uploaded; open the existing document instead.");
             group.Add(PilotStore.Obj("document",("id",id),("title",Path.GetFileName(file.FileName)),("type",type),("claimed",""),
                 ("computed",""),("status","Review required"),("source","Uploaded file; manual verification"),
-                 ("uploadedBy",Name(ctx)),("path",id+ext)));
-            return new{id,status="Review required",message="Stored privately. Manual review is required; OCR is not enabled in this pilot."};
+                ("uploadedBy",Name(ctx)),("sha256",sha256),("fileSize",file.Length),("path",id+ext)));
+            return new{id,status="Review required",message="Saved for manual review. No amounts, bills or stock have been posted."};
         });
-    }catch{try{File.Delete(stored);}catch{}throw;}
+        return Results.Ok(response);
+    }
+    catch(InvalidOperationException ex){
+        try{File.Delete(stored);}catch{}
+        return Results.Conflict(new{error=ex.Message});
+    }
+    catch{try{File.Delete(stored);}catch{}throw;}
 });
 api.MapGet("/documents/{id}/file",async(string id,HttpContext ctx,PilotStore s,IConfiguration config,IWebHostEnvironment env)=>{
     if(!InRole(ctx,"Owner","Salesperson"))return Results.Forbid();
@@ -285,7 +379,16 @@ api.MapPost("/deliveries",async(NewDispatch req,HttpContext ctx,PilotStore s)=>a
     var root=d.Root!;var bill=PilotStore.ById(root.Element("bills")!,req.BillId)??throw new InvalidOperationException("Create sale invoice first");
     if(PilotStore.Attr(bill,"status")!="Created - pending dispatch")throw new InvalidOperationException("Bill already dispatched");
     var product=PilotStore.ById(root.Element("products")!,req.ProductId)??throw new InvalidOperationException("Unknown SKU");
-    if(req.Quantity<=0||Available(root,req.ProductId)<req.Quantity)throw new InvalidOperationException("Insufficient stock - receive goods / count opening stock first");
+    if(req.Quantity<=0||req.Quantity!=decimal.Truncate(req.Quantity)||Available(root,req.ProductId)<req.Quantity)
+        throw new InvalidOperationException("Use a whole-number quantity with sufficient stock.");
+    var orderId=PilotStore.Attr(bill,"orderId");
+    if(!string.IsNullOrWhiteSpace(orderId)){
+        var linked=PilotStore.ById(root.Element("orders")!,orderId)
+            ??throw new InvalidOperationException("Linked order is missing");
+        if(PilotStore.Attr(linked,"productId")!=req.ProductId||
+           req.Quantity>PilotStore.Dec(linked,"qty"))
+            throw new InvalidOperationException("Dispatch must match the accepted order's SKU and cannot exceed ordered quantity.");
+    }
     root.Element("stock")!.Add(PilotStore.Obj("movement",("id",PilotStore.Id()),("productId",req.ProductId),
         ("product",PilotStore.Attr(product,"name")),("qty",-req.Quantity),("reason","Dispatch"),("at",DateTime.UtcNow)));
     var row=PilotStore.Obj("delivery",("id",PilotStore.Id()),("billId",req.BillId),("retailerId",PilotStore.Attr(bill,"retailerId")),
@@ -295,7 +398,8 @@ api.MapPost("/deliveries",async(NewDispatch req,HttpContext ctx,PilotStore s)=>a
 }));
 api.MapPost("/deliveries/{id}/confirm",async(string id,POD req,HttpContext ctx,PilotStore s)=>await Change(ctx,s,"delivery.pod",["Owner","Salesperson","Retailer"],d=>{
     var row=PilotStore.ById(d.Root!.Element("deliveries")!,id)??throw new InvalidOperationException("Delivery not found");
-    if(Role(ctx)=="Retailer" && PilotStore.Attr(row,"retailer")!="Kumar Maligai")throw new InvalidOperationException("Not your order");
+    if(!CanAccessShop(d.Root!,ctx,PilotStore.Attr(row,"retailerId")))
+        throw new InvalidOperationException("Delivery is not assigned to your shop or beat.");
     if(PilotStore.Attr(row,"status")!="Dispatched"||string.IsNullOrWhiteSpace(req.Receiver))throw new InvalidOperationException("Receiver and dispatched delivery required");
     if(req.Accepted<0||req.Accepted>PilotStore.Dec(row,"qty"))throw new InvalidOperationException("Invalid accepted quantity");
     row.SetAttributeValue("status",req.Accepted==PilotStore.Dec(row,"qty")?"Delivered":"Partial delivery - exception");
@@ -304,6 +408,8 @@ api.MapPost("/deliveries/{id}/confirm",async(string id,POD req,HttpContext ctx,P
 }));
 api.MapPost("/collections",async(NewCollection req,HttpContext ctx,PilotStore s)=>await Change(ctx,s,"collection.record",["Owner","Salesperson"],d=>{
     var root=d.Root!;var bill=PilotStore.ById(root.Element("bills")!,req.BillId)??throw new InvalidOperationException("Only verified posted bills may receive demo payments");
+    if(!CanAccessShop(root,ctx,PilotStore.Attr(bill,"retailerId")))
+        throw new InvalidOperationException("Cannot collect a bill outside your assigned beat.");
     var all=root.Element("collections")!;if(string.IsNullOrWhiteSpace(req.IdempotencyKey)||req.IdempotencyKey.Length>100)throw new InvalidOperationException("Payment request ID required");
     var existing=all.Elements().FirstOrDefault(x=>PilotStore.Attr(x,"key")==req.IdempotencyKey);
     if(existing!=null){if(PilotStore.Attr(existing,"billId")!=req.BillId||PilotStore.Dec(existing,"amount")!=req.Amount)throw new InvalidOperationException("Payment key reused with different values");return Render(existing);}
@@ -319,13 +425,29 @@ api.MapPost("/collections",async(NewCollection req,HttpContext ctx,PilotStore s)
 api.MapPost("/collections/{id}/bank-verify",async(string id,VerifiedBank req,HttpContext ctx,PilotStore s)=>await Change(ctx,s,"bank.record-evidence",["Owner"],d=>{
     var row=PilotStore.ById(d.Root!.Element("collections")!,id)??throw new InvalidOperationException("Unknown receipt");
     if(PilotStore.Attr(row,"status")!="Pending bank verification"||string.IsNullOrWhiteSpace(req.Reference)||string.IsNullOrWhiteSpace(req.ReviewerNote))throw new InvalidOperationException("Bank evidence and reviewer note required - screenshots alone do not prove payment");
+    var matchRef=req.Reference.Trim();
+    if(d.Root!.Element("collections")!.Elements("receipt").Any(x=>
+        PilotStore.Attr(x,"id")!=id && PilotStore.Attr(x,"bankRef")==matchRef &&
+        PilotStore.Attr(x,"status")=="Cleared"))
+        throw new InvalidOperationException("Bank reference was already used for another cleared receipt.");
     row.SetAttributeValue("status","Cleared");row.SetAttributeValue("bankRef",req.Reference.Trim());row.SetAttributeValue("reviewedBy",Name(ctx));return Render(row);
 }));
 api.MapPost("/cashclose",async(NewCash req,HttpContext ctx,PilotStore s)=>await Change(ctx,s,"cash.submit",["Owner","Salesperson"],d=>{
     var group=d.Root!.Element("collections")!;
-    var pending=group.Elements().Where(x=>PilotStore.Attr(x,"status")=="Cash pending handover"&&PilotStore.Attr(x,"by")==Name(ctx)).ToList();
-    if(!pending.Any())throw new InvalidOperationException("No cash receipts waiting for this user");
-    if(req.Counted<0||string.IsNullOrWhiteSpace(req.Date))throw new InvalidOperationException("Business date and counted notes required");
+    if(!DateOnly.TryParseExact(req.Date,"yyyy-MM-dd",CultureInfo.InvariantCulture,
+        DateTimeStyles.None,out var businessDate))
+        throw new InvalidOperationException("Enter a valid business date YYYY-MM-DD.");
+    // A receipt can belong to exactly one open cash handover. No duplicate submits.
+    var alreadySubmitted=d.Root!.Element("cashcloses")!.Elements("close")
+        .Where(x=>PilotStore.Attr(x,"status")=="Awaiting owner")
+        .SelectMany(x=>PilotStore.Attr(x,"receiptIds").Split(',',
+            StringSplitOptions.RemoveEmptyEntries)).ToHashSet(StringComparer.Ordinal);
+    var pending=group.Elements().Where(x=>PilotStore.Attr(x,"status")=="Cash pending handover"
+        &&PilotStore.Attr(x,"by")==Name(ctx)
+        && !alreadySubmitted.Contains(PilotStore.Attr(x,"id"))
+        && ReceiptBusinessDate(PilotStore.Attr(x,"at"))==businessDate).ToList();
+    if(!pending.Any())throw new InvalidOperationException("No unsubmitted cash receipts for this user and business date.");
+    if(req.Counted<0)throw new InvalidOperationException("Business date and counted notes required");
     if(req.Notes is null||req.Notes.Any(x=>x.Value<0||!new[]{500,200,100,50,20,10,5,2,1}.Contains(x.Key))
         ||req.Notes.Sum(x=>x.Key*(decimal)x.Value)!=req.Counted)
         throw new InvalidOperationException("Denomination totals must equal counted cash");
@@ -391,6 +513,55 @@ api.MapGet("/report",async(HttpContext ctx,PilotStore s)=>InRole(ctx,"Owner")?Re
 app.MapFallbackToFile("index.html");
 app.Run();
 
+static DateOnly ReceiptBusinessDate(string timestamp)
+{
+    if(!DateTime.TryParse(timestamp,CultureInfo.InvariantCulture,DateTimeStyles.RoundtripKind,
+        out var utc))return DateOnly.MinValue;
+    return DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(utc.ToUniversalTime(),
+        TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")));
+}
+
+static bool CanAccessShop(XElement root,HttpContext ctx,string retailerId)
+{
+    if(string.IsNullOrWhiteSpace(retailerId))return false;
+    if(Role(ctx)=="Owner")return true;
+    var user=root.Element("users")!.Elements("user")
+        .FirstOrDefault(x=>PilotStore.Attr(x,"name")==Name(ctx));
+    if(user is null||PilotStore.Attr(user,"status")=="Disabled")return false;
+    if(Role(ctx)=="Retailer")return PilotStore.Attr(user,"retailerId")==retailerId;
+    if(Role(ctx)!="Salesperson")return false;
+    var beat=PilotStore.Attr(user,"beat");
+    if(beat=="All")return true;
+    var shop=PilotStore.ById(root.Element("retailers")!,retailerId);
+    return !string.IsNullOrWhiteSpace(beat)&&shop is not null&&
+        PilotStore.Attr(shop,"beat")==beat;
+}
+
+static List<object> Aging(XElement root)
+{
+    var bills=root.Element("bills")!.Elements("bill").ToList();
+    var receipts=root.Element("collections")!.Elements("receipt").ToList();
+    var today=DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow,
+        TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")));
+    var result=new List<object>();
+    foreach(var bill in bills)
+    {
+        var paid=receipts.Where(x=>PilotStore.Attr(x,"billId")==PilotStore.Attr(bill,"id")
+            &&PilotStore.Attr(x,"status")=="Cleared").Sum(x=>PilotStore.Dec(x,"amount"));
+        var outstanding=PilotStore.Dec(bill,"amount")-paid;
+        if(outstanding<=0)continue;
+        DateOnly.TryParseExact(PilotStore.Attr(bill,"due"),"yyyy-MM-dd",CultureInfo.InvariantCulture,
+            DateTimeStyles.None,out var due);
+        var age=due==default?0:Math.Max(0,today.DayNumber-due.DayNumber);
+        var bucket=age==0?"Current":age<=7?"1–7 days":age<=30?"8–30 days":
+            age<=60?"31–60 days":"60+ days";
+        result.Add(new{billId=PilotStore.Attr(bill,"id"),billNo=PilotStore.Attr(bill,"billNo"),
+            retailerId=PilotStore.Attr(bill,"retailerId"),retailer=PilotStore.Attr(bill,"retailer"),
+            due=PilotStore.Attr(bill,"due"),outstanding,daysOverdue=age,bucket});
+    }
+    return result;
+}
+
 static string Name(HttpContext c)=>c.User.Identity?.Name??"";
 static string Role(HttpContext c)=>c.User.FindFirst(ClaimTypes.Role)?.Value??"";
 static bool InRole(HttpContext c,params string[] roles)=>roles.Contains(Role(c));
@@ -414,6 +585,8 @@ static async Task<IResult> Change(HttpContext ctx,PilotStore s,string action,str
 }
 public record Login(string Username,string Password);
 public record NewRetailer(string Name,string Beat);
+public record NewAccount(string Username,string Role,string Password,string? RetailerId,string? Beat);
+public record ResetPassword(string Password);
 public record NewOrder(string? RetailerId,string ProductId,decimal Quantity,string? Note);
 public record OrderDecision(bool Approve,string? Note);
 public record NewBill(string RetailerId,string BillNo,decimal Amount,string DueDate,string? OrderId=null);
