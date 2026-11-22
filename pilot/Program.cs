@@ -291,7 +291,7 @@ api.MapPost("/deliveries/{id}/confirm",async(string id,POD req,HttpContext ctx,P
     row.SetAttributeValue("accepted",PilotStore.Money(req.Accepted));row.SetAttributeValue("receiver",req.Receiver.Trim());
     row.SetAttributeValue("confirmedAt",DateTime.UtcNow.ToString("O"));return Render(row);
 }));
-api.MapPost("/collections",async(NewCollection req,HttpContext ctx,PilotStore s)=>await Change(ctx,s,"collection.record",["Owner"],d=>{
+api.MapPost("/collections",async(NewCollection req,HttpContext ctx,PilotStore s)=>await Change(ctx,s,"collection.record",["Owner","Salesperson"],d=>{
     var root=d.Root!;var bill=PilotStore.ById(root.Element("bills")!,req.BillId)??throw new InvalidOperationException("Only verified posted bills may receive demo payments");
     var all=root.Element("collections")!;if(string.IsNullOrWhiteSpace(req.IdempotencyKey)||req.IdempotencyKey.Length>100)throw new InvalidOperationException("Payment request ID required");
     var existing=all.Elements().FirstOrDefault(x=>PilotStore.Attr(x,"key")==req.IdempotencyKey);
