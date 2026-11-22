@@ -12,12 +12,9 @@ RESOURCE_GROUP = "badritradersPOC"
 APP = "badritraders"
 ROOT = "https://badritraders-hga6f6amdubqbhfb.southindia-01.azurewebsites.net"
 ACCOUNTS = [
-    ("OWNER", "owner.badri", "Owner"),
-    ("ACCOUNTS", "accounts.badri", "Accounts"),
-    ("WAREHOUSE", "warehouse.badri", "Warehouse"),
-    ("SALESMAN", "salesman.santhosh", "Salesman"),
-    ("RETAILER", "retailer.demo", "Retailer"),
-    ("OPERATOR", "operator.demo", "Operator"),
+    ("OWNER", "owner", "Owner"),
+    ("SALESMAN", "salesperson", "Salesperson"),
+    ("RETAILER", "retailer", "Retailer"),
 ]
 
 def call(path, method="GET", data=None, opener=None):
@@ -58,8 +55,11 @@ for suffix, username, expected_role in ACCOUNTS:
     assert status == 200 and verified.get("role") == expected_role, f"Session failed: {expected_role}"
     status, state = call("/api/state", opener=opener)
     assert status == 200 and state.get("role") == expected_role, f"Role dashboard failed: {expected_role}"
-    if expected_role == "Operator":
-        assert "retailers" not in state and "bills" not in state, "Operator should not see retailer financial data"
+    if expected_role == "Retailer":
+        assert "suppliers" not in state and "purchases" not in state, "Retailer must not see supplier data"
+        assert all(x.get("retailer") == "Kumar Maligai" for x in state.get("orders", []))
+    if expected_role == "Salesperson":
+        assert "supplierPayables" not in state.get("totals", {}), "Salesperson should not see supplier totals"
     print(f"PASS: {expected_role} login, session and role dashboard.")
 
-print("PASS: six independent roles authenticated. No changes to financial records.")
+print("PASS: three independent roles authenticated. No changes to financial records.")
