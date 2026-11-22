@@ -412,13 +412,29 @@ api.MapPost("/collections",async(NewCollection req,HttpContext ctx,PilotStore s)
 api.MapPost("/collections/{id}/bank-verify",async(string id,VerifiedBank req,HttpContext ctx,PilotStore s)=>await Change(ctx,s,"bank.record-evidence",["Owner"],d=>{
     var row=PilotStore.ById(d.Root!.Element("collections")!,id)??throw new InvalidOperationException("Unknown receipt");
     if(PilotStore.Attr(row,"status")!="Pending bank verification"||string.IsNullOrWhiteSpace(req.Reference)||string.IsNullOrWhiteSpace(req.ReviewerNote))throw new InvalidOperationException("Bank evidence and reviewer note required - screenshots alone do not prove payment");
+    var matchRef=req.Reference.Trim();
+    if(d.Root!.Element("collections")!.Elements("receipt").Any(x=>
+        PilotStore.Attr(x,"id")!=id && PilotStore.Attr(x,"bankRef")==matchRef &&
+        PilotStore.Attr(x,"status")=="Cleared"))
+        throw new InvalidOperationException("Bank reference was already used for another cleared receipt.");
     row.SetAttributeValue("status","Cleared");row.SetAttributeValue("bankRef",req.Reference.Trim());row.SetAttributeValue("reviewedBy",Name(ctx));return Render(row);
 }));
 api.MapPost("/cashclose",async(NewCash req,HttpContext ctx,PilotStore s)=>await Change(ctx,s,"cash.submit",["Owner","Salesperson"],d=>{
     var group=d.Root!.Element("collections")!;
-    var pending=group.Elements().Where(x=>PilotStore.Attr(x,"status")=="Cash pending handover"&&PilotStore.Attr(x,"by")==Name(ctx)).ToList();
-    if(!pending.Any())throw new InvalidOperationException("No cash receipts waiting for this user");
-    if(req.Counted<0||string.IsNullOrWhiteSpace(req.Date))throw new InvalidOperationException("Business date and counted notes required");
+    if(!DateOnly.TryParseExact(req.Date,"yyyy-MM-dd",CultureInfo.InvariantCulture,
+        DateTimeStyles.None,out var businessDate))
+        throw new InvalidOperationException("Enter a valid business date YYYY-MM-DD.");
+    // A receipt can belong to exactly one open cash handover. No duplicate submits.
+    var alreadySubmitted=d.Root!.Element("cashcloses")!.Elements("close")
+        .Where(x=>PilotStore.Attr(x,"status")=="Awaiting owner")
+        .SelectMany(x=>PilotStore.Attr(x,"receiptIds").Split(',',
+            StringSplitOptions.RemoveEmptyEntries)).ToHashSet(StringComparer.Ordinal);
+    var pending=group.Elements().Where(x=>PilotStore.Attr(x,"status")=="Cash pending handover"
+        &&PilotStore.Attr(x,"by")==Name(ctx)
+        && !alreadySubmitted.Contains(PilotStore.Attr(x,"id"))
+        && ReceiptBusinessDate(PilotStore.Attr(x,"at"))==businessDate).ToList();
+    if(!pending.Any())throw new InvalidOperationException("No unsubmitted cash receipts for this user and business date.");
+    if(req.Counted<0)throw new InvalidOperationException("Business date and counted notes required");
     if(req.Notes is null||req.Notes.Any(x=>x.Value<0||!new[]{500,200,100,50,20,10,5,2,1}.Contains(x.Key))
         ||req.Notes.Sum(x=>x.Key*(decimal)x.Value)!=req.Counted)
         throw new InvalidOperationException("Denomination totals must equal counted cash");
@@ -483,6 +499,14 @@ api.MapGet("/report",async(HttpContext ctx,PilotStore s)=>InRole(ctx,"Owner")?Re
 })):Results.Forbid());
 app.MapFallbackToFile("index.html");
 app.Run();
+
+static DateOnly ReceiptBusinessDate(string timestamp)
+{
+    if(!DateTime.TryParse(timestamp,CultureInfo.InvariantCulture,DateTimeStyles.RoundtripKind,
+        out var utc))return DateOnly.MinValue;
+    return DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(utc.ToUniversalTime(),
+        TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")));
+}
 
 static bool CanAccessShop(XElement root,HttpContext ctx,string retailerId)
 {
