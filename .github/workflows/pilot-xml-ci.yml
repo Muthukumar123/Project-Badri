@@ -77,3 +77,28 @@ jobs:
           print('Smoke test passed: owner login, seed references, no fabricated dues, anti-CSRF, persisted retailer')
           PY
           python3 "$GITHUB_WORKSPACE/tools/test_pilot_flows.py"
+          # Reproduce upgrading a previously deployed six-account XML file.
+          # Use test XML only; scripts never print or upload account secrets.
+          kill "$PID" || true
+          wait "$PID" || true
+          python3 "$GITHUB_WORKSPACE/tools/test_three_role_migration.py" prepare
+          dotnet Badri.Pilot.dll > /tmp/badri-migration-log.txt 2>&1 &
+          PID=$!
+          for i in {1..25}; do
+            if curl -fsS http://127.0.0.1:5091/health >/dev/null; then break; fi
+            sleep 1
+          done
+          python3 "$GITHUB_WORKSPACE/tools/test_three_role_migration.py" migrated
+          # An Azure Portal password change triggers an App Service restart.
+          kill "$PID" || true
+          wait "$PID" || true
+          export PREVIOUS_BADRI_PASS_OWNER="$BADRI_PASS_OWNER"
+          export BADRI_PASS_OWNER=$(openssl rand -hex 20)
+          dotnet Badri.Pilot.dll > /tmp/badri-rotation-log.txt 2>&1 &
+          PID=$!
+          for i in {1..25}; do
+            if curl -fsS http://127.0.0.1:5091/health >/dev/null; then break; fi
+            sleep 1
+          done
+          python3 "$GITHUB_WORKSPACE/tools/test_three_role_migration.py" rotated
+
