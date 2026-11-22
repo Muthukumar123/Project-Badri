@@ -87,7 +87,7 @@ api.MapGet("/state",async(HttpContext c,PilotStore s)=>await s.Read<IResult>(d=>
     var pending=receipts.Where(x=>Get(x,"status")!="Cleared").Sum(x=>Value(x,"amount"));
     var payables=purchases.Where(x=>Get(x,"status")=="Received"||Get(x,"status")=="Part received")
         .Sum(x=>Value(x,"amount")-Value(x,"paid"));
-    var totals=new{receivable=due,pendingReceipts=pending,supplierPayables=payables,documentReviews=docs.Count(x=>Get(x,"status")=="Review required"),stockUnits=products.Sum(x=>StockQty(stock,Get(x,"id")))};
+    var totals=new{receivable=due,pendingReceipts=pending,supplierPayables=payables,documentReviews=docs.Count(x=>Get(x,"status")=="Review required"&&!string.IsNullOrWhiteSpace(Get(x,"path"))),stockUnits=products.Sum(x=>StockQty(stock,Get(x,"id")))};
     if(role=="Retailer"){
         // This R1 retailer identity is intentionally scoped to Kumar Maligai only.
         // Future multi-retailer rollout requires separate retailer accounts & memberships.
