@@ -39,7 +39,8 @@ builder.Services.AddAuthorization();
 builder.Services.AddRateLimiter(options=>{
     options.RejectionStatusCode=429;
     options.AddPolicy("login",ctx=>RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString()??"unknown",_=>
-        new FixedWindowRateLimiterOptions{PermitLimit=7,Window=TimeSpan.FromMinutes(2),QueueLimit=0}));
+        new FixedWindowRateLimiterOptions{PermitLimit=builder.Environment.IsDevelopment()?40:7,
+            Window=TimeSpan.FromMinutes(2),QueueLimit=0}));
 });
 builder.WebHost.ConfigureKestrel(o=>o.Limits.MaxRequestBodySize=12*1024*1024);
 var app=builder.Build();
