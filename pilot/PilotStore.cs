@@ -21,7 +21,7 @@ public sealed class PilotStore
         if (File.Exists(file)) doc = LoadSafe(file);
         else
         {
-            doc = XDocument.Parse("<badri version='1'><users/><retailers/><suppliers/><products/><documents/><purchases/><stock/><bills/><deliveries/><collections/><cashcloses/><payments/><returns/><audit/></badri>");
+            doc = XDocument.Parse("<badri version='1'><users/><retailers/><suppliers/><products/><orders/><documents/><purchases/><stock/><bills/><deliveries/><collections/><cashcloses/><payments/><returns/><audit/></badri>");
             Seed.Load(doc);
             Save();
         }
@@ -57,31 +57,84 @@ public sealed class PilotStore
         }
         catch { return false; }
     }
+    // XML pilot migration. Preserve invoices, receipts, deliveries, stock and audit.
+    // Only the login identities change to owner / salesperson / retailer.
     void Bootstrap(IConfiguration config)
     {
-        var accounts = new (string user, string role, string key)[]
+        var accounts = new (string user, string role, string primary, string fallback, string legacy)[]
         {
-            ("owner.badri","Owner","BADRI_PASS_OWNER"),
-            ("accounts.badri","Accounts","BADRI_PASS_ACCOUNTS"),
-            ("warehouse.badri","Warehouse","BADRI_PASS_WAREHOUSE"),
-            ("salesman.santhosh","Salesman","BADRI_PASS_SALESMAN"),
-            ("retailer.demo","Retailer","BADRI_PASS_RETAILER"),
-            ("operator.demo","Operator","BADRI_PASS_OPERATOR")
+            ("owner", "Owner", "BADRI_PASS_OWNER", "", "owner.badri"),
+            ("salesperson", "Salesperson", "BADRI_PASS_SALESPERSON", "BADRI_PASS_SALESMAN", "salesman.santhosh"),
+            ("retailer", "Retailer", "BADRI_PASS_RETAILER", "", "retailer.demo")
         };
+        var root = doc.Root ?? throw new InvalidOperationException("Pilot XML root missing");
         var users = Group("users");
-        var changed = false;
-        foreach (var (username,role,key) in accounts)
+        bool changed = false;
+        if (root.Element("orders") is null) { root.Add(new XElement("orders")); changed = true; }
+
+        // Preserve actor ownership on already entered pilot receipts and cash counts.
+        foreach (var row in root.Descendants())
+            foreach (var key in new[] { "by", "preparedBy", "approvedBy", "reviewedBy", "placedBy" })
+            {
+                var attribute = row.Attribute(key);
+                if (attribute?.Value == "salesman.santhosh") { attribute.Value = "salesperson"; changed = true; }
+                if (attribute?.Value == "owner.badri") { attribute.Value = "owner"; changed = true; }
+            }
+
+        foreach (var (username,role,primary,fallback,legacy) in accounts)
         {
-            if (users.Elements("user").Any(x=>Attr(x,"name")==username)) continue;
-            var password = config[key];
+            var password = config[primary] ?? (string.IsNullOrEmpty(fallback) ? null : config[fallback]);
             if (string.IsNullOrWhiteSpace(password) || password.Length < 14)
-                throw new InvalidOperationException($"Set {key} to a unique 14+ character secret before first launch. Never commit credentials to Git.");
-            users.Add(new XElement("user", new XAttribute("name",username),new XAttribute("role",role),
-                new XAttribute("tenant",DemoTenant),new XAttribute("hash",HashPassword(password))));
-            changed = true;
+                throw new InvalidOperationException($"Configure {primary} (or legacy {fallback}) with a 14+ character secret in Azure App Settings.");
+
+            var user = users.Elements("user")
+                .FirstOrDefault(x=>Attr(x,"name")==username)
+                ?? users.Elements("user").FirstOrDefault(x=>Attr(x,"name")==legacy);
+            if (user is null)
+            {
+                user = new XElement("user"); users.Add(user); changed = true;
+            }
+            if (Attr(user,"name")!=username || Attr(user,"role")!=role || Attr(user,"tenant")!=DemoTenant)
+            {
+                user.SetAttributeValue("name", username);
+                user.SetAttributeValue("role", role);
+                user.SetAttributeValue("tenant", DemoTenant);
+                changed = true;
+            }
+            // Explicit App Setting password rotation. Azure restarts the worker on
+            // configuration changes. Existing secure-cookie sessions are invalidated.
+            if (!Verify(password, Attr(user,"hash")))
+            {
+                user.SetAttributeValue("hash", HashPassword(password));
+                changed = true;
+            }
         }
-        if (changed) Save();
+        var active = new HashSet<string>(accounts.Select(x=>x.user),StringComparer.Ordinal);
+        foreach (var obsolete in users.Elements("user").Where(x=>!active.Contains(Attr(x,"name"))).ToList())
+        {
+            obsolete.Remove(); changed = true;
+        }
+        if (changed)
+        {
+            if (File.Exists(file) && !File.Exists(file + ".before-three-roles.bak"))
+                File.Copy(file,file + ".before-three-roles.bak");
+            Save();
+        }
     }
+
+    // A login cookie is tied to the current password hash in persisted XML.
+    // A portal password change invalidates every earlier session after app restart.
+    public Task<string> SessionStamp(string username) => Read(d=>
+    {
+        var user=d.Root?.Element("users")?.Elements("user")
+            .FirstOrDefault(x=>Attr(x,"name")==username);
+        if(user is null)return "";
+        var value=Attr(user,"hash");
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+    });
+    public Task<string> RoleForUser(string username) => Read(d=>
+        Attr(d.Root?.Element("users")?.Elements("user")
+            .FirstOrDefault(x=>Attr(x,"name")==username),"role"));
     public XElement Group(string group) => doc.Root!.Element(group) ?? throw new InvalidOperationException("Missing XML collection: "+group);
     public static string Attr(XElement? node,string name) => node?.Attribute(name)?.Value ?? "";
     public static decimal Dec(XElement? node,string name) => decimal.TryParse(Attr(node,name),NumberStyles.Number,CultureInfo.InvariantCulture,out var v)?v:0m;
