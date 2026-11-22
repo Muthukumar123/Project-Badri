@@ -56,9 +56,10 @@ async function simulate(role, username, signedIn=true) {
     assert.equal(vm.runInContext('allowedView("cash")',ctx),false);
   }
   if(role==='Owner') {
-    for(const area of ['inventory','accounts','tools']){
+    for(const area of ['inventory','accounts','tools','team','dues']){
       vm.runInContext('view='+JSON.stringify(area)+';render()',ctx,{timeout:1500});
-      assert(root.innerHTML.includes('quick')||root.innerHTML.includes('kpi'),area+' page empty');
+      assert(root.innerHTML.includes('quick')||root.innerHTML.includes('kpi')||root.innerHTML.includes('data-form="shop-user"'),area+' page empty');
+      if(area==='team') assert(root.innerHTML.includes('data-form="shop-user"')&&root.innerHTML.includes('data-form="field-user"'),'Account forms missing');
     }
   }
   console.log('PASS: '+role+' menu, dashboard, orders and authorized navigation');
