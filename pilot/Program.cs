@@ -110,7 +110,8 @@ api.MapGet("/state",async(HttpContext c,PilotStore s)=>await s.Read<IResult>(d=>
             .Sum(x=>Value(x,"amount")),
         pendingOrders=orders.Count(x=>Get(x,"status")=="New")},
         retailers=shops,products=products.Select(x=>new{id=Get(x,"id"),name=Get(x,"name")}),
-        orders, bills=bills,deliveries,
+        orders,bills,deliveries,
+        documents=docs.Where(x=>Get(x,"uploadedBy")==Name(c)&&Get(x,"type")!="Supplier invoice"),
         collections=receipts.Where(x=>Get(x,"by")==Name(c)),
         cashcloses=cash.Where(x=>Get(x,"by")==Name(c))});
     return Results.Ok(new{role,totals,retailers=shops,suppliers=supplier,products,documents=docs,purchases,stock,bills,
@@ -182,6 +183,8 @@ api.MapPost("/documents/upload",async(HttpContext ctx,PilotStore s,IWebHostEnvir
     if(!InRole(ctx,"Owner","Salesperson"))return Results.Forbid();
     var form=await ctx.Request.ReadFormAsync();var file=form.Files.FirstOrDefault();
     var type=form["type"].ToString();
+    if(Role(ctx)=="Salesperson" && type=="Supplier invoice")
+        return Results.Forbid();
     if(file is null||file.Length==0||file.Length>10*1024*1024|| !new[]{"Collection sheet","Supplier invoice","Delivery sheet"}.Contains(type))return Results.BadRequest(new{error="Select type and PDF/JPG/PNG file (max 10MB)"});
     var ext=Path.GetExtension(file.FileName).ToLowerInvariant();if(!new[]{".pdf",".png",".jpg",".jpeg"}.Contains(ext))return Results.BadRequest(new{error="Unsupported file extension"});
     using var input=file.OpenReadStream();var header=new byte[8];_ = await input.ReadAsync(header);input.Position=0;
@@ -195,14 +198,22 @@ api.MapPost("/documents/upload",async(HttpContext ctx,PilotStore s,IWebHostEnvir
         return await Change(ctx,s,"document.upload",["Owner","Salesperson"],d=>{
             var group=d.Root!.Element("documents")!;
             group.Add(PilotStore.Obj("document",("id",id),("title",Path.GetFileName(file.FileName)),("type",type),("claimed",""),
-                ("computed",""),("status","Review required"),("source","Uploaded file; manual verification"),("path",id+ext)));
+                ("computed",""),("status","Review required"),("source","Uploaded file; manual verification"),
+                 ("uploadedBy",Name(ctx)),("path",id+ext)));
             return new{id,status="Review required",message="Stored privately. Manual review is required; OCR is not enabled in this pilot."};
         });
     }catch{try{File.Delete(stored);}catch{}throw;}
 });
 api.MapGet("/documents/{id}/file",async(string id,HttpContext ctx,PilotStore s,IConfiguration config,IWebHostEnvironment env)=>{
     if(!InRole(ctx,"Owner","Salesperson"))return Results.Forbid();
-    var path=await s.Read(d=>PilotStore.Attr(PilotStore.ById(d.Root!.Element("documents")!,id),"path"));
+    var metadata=await s.Read(d=>{
+        var item=PilotStore.ById(d.Root!.Element("documents")!,id);
+        return new {path=PilotStore.Attr(item,"path"),by=PilotStore.Attr(item,"uploadedBy"),
+            type=PilotStore.Attr(item,"type")};
+    });
+    if(Role(ctx)=="Salesperson" && (metadata.by!=Name(ctx)||metadata.type=="Supplier invoice"))
+        return Results.Forbid();
+    var path=metadata.path;
     if(string.IsNullOrEmpty(path)||Path.GetFileName(path)!=path)return Results.NotFound();
     var folder=Path.Combine(Path.GetDirectoryName(Path.GetFullPath(config["BADRI_XML_PATH"]??Path.Combine(env.ContentRootPath,"pilot-data.xml")))!,"uploads");
     var full=Path.Combine(folder,path);
@@ -211,7 +222,7 @@ api.MapGet("/documents/{id}/file",async(string id,HttpContext ctx,PilotStore s,I
     return Results.File(full,media,enableRangeProcessing:false);
 });
 api.MapGet("/documents/{id}/rows",async(string id,HttpContext ctx,PilotStore s)=>{
-    if(!InRole(ctx,"Owner","Salesperson"))return Results.Forbid();
+    if(!InRole(ctx,"Owner"))return Results.Forbid();
     return Results.Ok(await s.Read(d=>{
         var item=PilotStore.ById(d.Root!.Element("documents")!,id);
         return item?.Elements("row").Select(Render).ToList()??new List<Dictionary<string,string>>();
@@ -350,7 +361,10 @@ api.MapPost("/supplierpayments/{id}/approve",async(string id,ApprovalReason req,
     if(PilotStore.Attr(row,"preparedBy")==Name(ctx) && (req.Reason?.Trim().Length??0)<10)
         throw new InvalidOperationException("Single-owner pilot: record a 10+ character independent bank evidence review note before self-approval");
     var bill=PilotStore.ById(root.Element("purchases")!,PilotStore.Attr(row,"purchaseId"))!;
-    bill.SetAttributeValue("paid",PilotStore.Dec(bill,"paid")+PilotStore.Dec(row,"amount"));
+    var amount=PilotStore.Dec(row,"amount");
+    if(amount<=0||amount>PilotStore.Dec(bill,"amount")-PilotStore.Dec(bill,"paid"))
+        throw new InvalidOperationException("Recorded supplier payment exceeds the remaining invoice balance");
+    bill.SetAttributeValue("paid",PilotStore.Dec(bill,"paid")+amount);
     row.SetAttributeValue("status","Recorded - evidence reviewed");row.SetAttributeValue("approvedBy",Name(ctx));
     row.SetAttributeValue("approvalEvidence",req.Reason?.Trim()??"");
     return Render(row);
