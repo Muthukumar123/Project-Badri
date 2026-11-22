@@ -28,8 +28,8 @@ def call(path, method="GET", data=None, opener=None):
         return response.status, (json.loads(raw) if raw else {})
 
 code, health = call("/health")
-assert code == 200 and health.get("version") == "pilot-r1", "Unexpected /health response"
-print("PASS: Azure /health returned Badri XML pilot-r1.")
+assert code == 200 and health.get("version") == "pilot-r2", "Unexpected /health response"
+print("PASS: Azure /health returned Badri XML pilot-r2.")
 
 try:
     call("/api/state")

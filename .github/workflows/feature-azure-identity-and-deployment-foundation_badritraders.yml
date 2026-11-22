@@ -162,14 +162,14 @@ jobs:
           ready=0
           for i in {1..24}; do
             if curl --max-time 15 -fsS "$url/health" -o "$RUNNER_TEMP/badri-health.json" \
-              && grep -Eq '"version"[[:space:]]*:[[:space:]]*"pilot-r1"' "$RUNNER_TEMP/badri-health.json"; then
+              && grep -Eq '"version"[[:space:]]*:[[:space:]]*"pilot-r2"' "$RUNNER_TEMP/badri-health.json"; then
               ready=1
               break
             fi
             sleep 10
           done
           if [[ "$ready" != 1 ]]; then
-            echo "::error::Deployed site did not pass /health pilot-r1 verification."
+            echo "::error::Deployed site did not pass /health pilot-r2 verification."
             exit 1
           fi
           curl --max-time 15 -fsS "$url/" | grep -q "Badri TradeFlow"

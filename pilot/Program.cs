@@ -47,7 +47,7 @@ var app=builder.Build();
 // Do not turn on UseForwardedHeaders with unrestricted trust.
 if(!app.Environment.IsDevelopment())app.UseHsts(); // Azure App Service enforces HTTPS-only at the edge.
 app.UseDefaultFiles();app.UseStaticFiles();app.UseRateLimiter();app.UseAuthentication();app.UseAuthorization();
-app.MapGet("/health",()=>Results.Ok(new{status="ok",database="XML pilot only",version="pilot-r1",data="review-only source samples"}));
+app.MapGet("/health",()=>Results.Ok(new{status="ok",database="XML pilot only",version="pilot-r2",data="review-only source samples"}));
 
 app.MapPost("/api/auth/login",async(Login req,HttpContext ctx,PilotStore store)=>{
     if(string.IsNullOrWhiteSpace(req.Username)||string.IsNullOrWhiteSpace(req.Password))return Results.BadRequest(new{error="Username and password required"});

@@ -67,6 +67,6 @@ The workflow `.github/workflows/feature-azure-identity-and-deployment-foundation
 
 - Automated build and XML pilot flow test for three roles.
 - Frontend `node --check` syntax verification.
-- Live test: `/health` = `pilot-r1`, anonymous `/api/state` = HTTP 401, all three logins authenticate and each role has only authorized business data.
+- Live test: `/health` = `pilot-r2`, anonymous `/api/state` = HTTP 401, all three logins authenticate and each role has only authorized business data.
 
 **Do not merge code directly to `main` while the three-role pilot is under review.** Pilot is deployed from the feature branch only.
