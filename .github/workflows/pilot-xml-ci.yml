@@ -78,6 +78,7 @@ jobs:
           PY
           python3 "$GITHUB_WORKSPACE/tools/test_pilot_flows.py"
           python3 "$GITHUB_WORKSPACE/tools/test_account_controls.py"
+          python3 "$GITHUB_WORKSPACE/tools/test_document_dedupe.py"
           # Reproduce upgrading a previously deployed six-account XML file.
           # Use test XML only; scripts never print or upload account secrets.
           kill "$PID" || true
