@@ -46,9 +46,95 @@ const titles={orders:['Orders / ஆர்டர்','Request, review, bill and d
 function pageTitle(){return titles[view]?.[0]||titles.home[0]}function pageSub(){return titles[view]?.[1]||''}function pageIcon(){return titles[view]?.[2]||'🏠'}
 function pageContent(){switch(view){case'home':return home();case'orders':return orders();case'inventory':return inventory();case'accounts':return accounts();case'tools':return toolsPage();case'documents':return documents();case'purchases':return purchases();case'stock':return stock();case'sales':return sales();case'delivery':return delivery();case'collections':return collections();case'cash':return cash();case'dues':return dues();case'payables':return payables();case'returns':return returns();case'reports':return reports();case'audit':return audit();case'admin':return admin();default:return home()}}
 function quick(id,emoji,title,sub){return allowedView(id)?`<button class="quick" data-nav="${id}"><span>${emoji}</span><b>${title}</b><small>${sub}</small></button>`:''}
-function home(){if(session.role==='Operator')return admin();if(session.role==='Retailer')return retailer();const t=state.totals||{};return `<div class="grid"><div class="kpi"><div class="label">Money to Collect / வரவேண்டியது</div><strong>${money(t.receivable)}</strong><small>Posted bills, cleared payments only</small></div><div class="kpi"><div class="label">Receipts Pending / சரிபார்க்க வேண்டியது</div><strong>${money(t.pendingReceipts)}</strong><small>Cash/UPI not yet cleared</small></div><div class="kpi"><div class="label">Documents to Check / ஆவணங்கள்</div><strong>${t.documentReviews??0}</strong><small>Historical reference sheets included</small></div></div>
-${box('What do you need to do? / அடுத்து என்ன செய்வது?','Choose a large button — complete a task in three steps.',`<div class="actions-grid">${quick('collections','💵','Collect Money / வசூல்','Record cash or UPI')}${quick('cash','🪙','Count Cash / கணக்கு','End of day handover')}${quick('documents','📤','Upload Document / PDF','Invoice, collection or delivery')}${quick('purchases','🧾','Check Supplier Bill / பில்','Approve then receive')}${quick('stock','📦','Check Stock / இருப்பு','Count and reorder')}${quick('dues','📊','Who owes me? / நிலுவை','Retailer bills')}${quick('delivery','🚚','Confirm Delivery / டெலிவரி','Received or short')}${quick('payables','🏦','Pay Supplier / செலுத்த','Approval required')}</div>`)}
-<div class="notice"><b>Important / முக்கியம்:</b> The seven original historical documents are only references until an authorized employee verifies and posts them. Invoice values are NOT automatic unpaid balances. XML storage is a temporary single-instance pilot.</div>`;}
+
+function tile(label,value,help){return `<div class="kpi"><div class="label">${label}</div><strong>${value}</strong><small>${help}</small></div>`;}
+function home(){
+ if(session.role==='Retailer')return retailer();
+ if(session.role==='Salesperson'){
+  const t=state.totals||{};const dispatched=arr('deliveries').filter(x=>x.status==='Dispatched').length;
+  return `<div class="hello-banner"><h2>My work today / இன்று என் வேலை</h2><p>Take orders → deliver goods → collect money → hand over cash.</p></div>
+  <div class="grid mini-kpis">${tile('Deliveries / டெலிவரி',dispatched,'Get shop acknowledgment')}
+  ${tile('Cash to hand over',money(t.pendingCash),'Count physical notes')}
+  ${tile('New orders',t.pendingOrders??0,'Owner will review')}</div>
+  ${box('What next? / அடுத்து என்ன?','Select your next task.',
+   `<div class="actions-grid">${quick('orders','🧺','1. Take order','Shop request')}
+    ${quick('delivery','🚚','2. Deliver','Confirm quantity received')}
+    ${quick('collections','💵','3. Collect','Record cash or UPI')}
+    ${quick('cash','🪙','4. Handover','Count cash for owner')}</div>`)}
+  ${box('Alerts / அறிவிப்புகள்','Your delivery and cash reminders.',
+   `<div class="list-message">${dispatched?'🚚 '+dispatched+' delivery acknowledgment(s) pending.':'✅ No delivery pending.'}</div>
+    <div class="list-message">${Number(t.pendingCash)>0?'💵 Cash to hand over: '+money(t.pendingCash):'✅ Cash handover is up to date.'}</div>`)}`;
+ }
+ const t=state.totals||{},pending=arr('orders').filter(x=>x.status==='New').length,
+       cashWaiting=arr('cashcloses').filter(x=>x.status==='Awaiting owner').length,
+       bankWaiting=arr('collections').filter(x=>x.status==='Pending bank verification').length;
+ return `<div class="hello-banner"><h2>Your business today / இன்றைய வியாபாரம்</h2><p>Do the urgent items first. Everything else fits into four areas.</p></div>
+ <div class="grid mini-kpis">${tile('Retailer dues / நிலுவை',money(t.receivable),'Posted bills minus cleared receipts')}
+ ${tile('New orders / ஆர்டர்',pending,'Retailer requests for review')}
+ ${tile('Cash to approve / ரொக்கம்',cashWaiting,'Cash handovers')}</div>
+ ${box('Needs your attention / கவனம் தேவை','One action at a time.',
+  `<div class="task-row"><b>🧺 ${pending} retailer orders</b>${quick('orders','→','Review orders','Accept or decline')}</div>
+  <div class="task-row"><b>🪙 ${cashWaiting} cash handovers</b>${quick('cash','→','Check cash','Confirm note count')}</div>
+  <div class="task-row"><b>🏦 ${bankWaiting} UPI/bank receipts</b>${quick('collections','→','Verify payments','Requires bank evidence')}</div>
+  <div class="task-row"><b>🧾 ${t.documentReviews??0} documents to review</b>${quick('documents','→','Check document','Paper is not posted')}</div>`)}
+ ${box('Run the business / வியாபார வேலை','Choose an area to continue.',
+  `<div class="actions-grid">${quick('orders','🧺','Orders & Sales','Retailer bookings, invoices')}
+  ${quick('inventory','📦','Stock & Purchases','Supplier bills, GRN, returns')}
+  ${quick('accounts','💰','Money & Accounts','Collections, cash, payables')}
+  ${quick('tools','📁','Documents & Reports','Uploads, history')}</div>`)}
+ <div class="notice"><b>XML pilot:</b> Historical sheets are reference-only. They do not automatically create a due, payment or delivery.</div>`;
+}
+function orderCards(){
+ const rows=arr('orders');
+ return rows.length?`<div class="order-list">${rows.map(o=>`<div class="order-item"><div>
+ <b>${esc(o.retailer)}</b><p>${esc(o.product)} · ${esc(o.qty)} units</p>
+ <small>${esc(o.note||'No note')}</small></div><div class="order-actions">${pill(o.status)}
+ ${session.role==='Owner'&&o.status==='New'?`<button class="btn btn-mini" data-action="order-accept" data-id="${esc(o.id)}">Accept / ஏற்று</button>
+ <button class="btn btn-mini btn-secondary" data-action="order-decline" data-id="${esc(o.id)}">Decline</button>`:''}</div></div>`).join('')}</div>`
+ :'<div class="empty-state">No orders yet. / இன்னும் ஆர்டர் இல்லை.</div>';
+}
+function orders(){
+ if(session.role==='Owner')return `${box('Retailer orders / கடை ஆர்டர்',
+   'Review before accepting. Accepting an order does NOT post an invoice or move stock.',orderCards())}
+   ${box('Next steps / அடுத்து','Once accepted, record a bill, dispatch goods and get receiver acknowledgment.',
+   `<div class="actions-grid">${quick('sales','🧾','Create sales bill','Select accepted order')}
+   ${quick('delivery','🚚','Dispatch goods','Deduct warehouse stock')}
+   ${quick('dues','📋','Retailer balances','See pending collection')}</div>`)}`;
+ const shop=session.role==='Retailer';
+ const retailField=shop?'':select('retailerId','Retailer / கடை',arr('retailers'));
+ return `${box(shop?'Place order / ஆர்டர் செய்':'Take order / ஆர்டர் பதிவு',
+  shop?'Select item and quantity; owner will approve the request. No payment here.'
+      :'Select the shop and item. Owner verifies and confirms it.',
+   form('order',`${retailField}${select('productId','Product / பொருள்',arr('products'))}
+    ${field('quantity','Quantity / எண்ணிக்கை','number','1')}
+    ${field('note','Optional note / குறிப்பு','text','',false)}`,
+   'Send order / ஆர்டர் அனுப்பு'))}
+  ${box(shop?'My orders / என் ஆர்டர்':'Orders submitted / ஆர்டர் பட்டியல்',
+    'Status: New → Accepted → Billed; delivery is tracked separately.',orderCards())}`;
+}
+function inventory(){const t=state.totals||{};
+ return `<div class="grid mini-kpis">${tile('Stock units',t.stockUnits??0,'Available stock movements')}
+ ${tile('Supplier liabilities',money(t.supplierPayables),'Received invoice values')}</div>
+ ${box('Stock tasks / இருப்பு வேலை','Invoice approval never increases available stock. Count actual goods.',
+  `<div class="actions-grid">${quick('purchases','🧾','Supplier invoices','Review then record GRN')}
+  ${quick('stock','📦','Stock & batches','Physical counts')}
+  ${quick('returns','↩️','Returns & damage','Quarantine goods')}
+  ${quick('documents','📤','Upload supplier PDF','Manual verification')}</div>`)}`;}
+function accounts(){const t=state.totals||{};
+ return `<div class="grid mini-kpis">${tile('Receivables',money(t.receivable),'Cleared receipts deducted')}
+ ${tile('Unverified receipts',money(t.pendingReceipts),'Cash and UPI still pending')}
+ ${tile('Supplier due',money(t.supplierPayables),'Received invoice balance')}</div>
+ ${box('Money tasks / பண பரிவர்த்தனை','Cash and bank need different verification.',
+  `<div class="actions-grid">${quick('collections','💵','Collections','Record money received')}
+  ${quick('cash','🪙','Cash handover','Owner approves note count')}
+  ${quick('dues','📋','Retailer outstanding','Shop balances and registration')}
+  ${quick('payables','🏦','Supplier payments','External evidence + approval')}</div>`)}`;}
+function toolsPage(){return `${box('Use only when required / தேவைப்படும்போது',
+ 'Everyday work is on Today, Orders, Stock and Accounts.',
+ `<div class="actions-grid">${quick('documents','📤','Upload & verify PDF','Collection, invoice and delivery')}
+ ${quick('reports','📈','Owner report','Verified totals')}
+ ${quick('audit','🛡️','Activity history','Who did what')}</div>`)}
+ <div class="notice">Single-trader pilot using XML. Not yet designed for multiple real traders or commercial accounting.</div>`;}
 function docsTable(){return arr('documents').map(d=>`<div class="doc-card"><div class="doc-meta"><h3>${esc(d.type)} · ${esc(d.title)}</h3>${pill(d.status)}</div><small>${esc(d.notes||d.source)}</small><div class="line"><span>Written total: <b>${d.claimed?money(d.claimed):'Not visible'}</b></span><span>Calculated: <b>${d.computed?money(d.computed):'Requires full document'}</b></span><span>${d.cashCount?'Counted cash: '+money(d.cashCount):''}</span></div><div class="form-actions">${d.path?`<a class="btn btn-secondary btn-mini" target="_blank" rel="noopener" href="/api/documents/${esc(d.id)}/file">View original file / படம்</a>`:''}${session.role==='Owner'||session.role==='Owner'?`<button class="btn btn-mini btn-secondary" data-action="view-rows" data-id="${esc(d.id)}">View rows / வரிகள்</button> <button class="btn btn-mini" data-action="review-doc" data-id="${esc(d.id)}">Review / சரிபார்</button>`:''}</div></div>`).join('')}
 function documents(){return `<div class="notice"><b>PDF upload is real; extraction is not automated yet.</b> Selected PDFs/photos are stored privately and listed for manual review. Upload never posts stock or payments.</div>${box('Upload / பதிவேற்றம்','Select one type then choose a PDF, JPG or PNG up to 10 MB.',`<form data-form="upload" class="forms"><label>Document type / வகை<select name="type"><option>Collection sheet</option><option>Supplier invoice</option><option>Delivery sheet</option></select></label><label>Select PDF or photo / படம்<input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg" required /></label>${submit('Upload & check / பதிவேற்றவும்')}</form>`)}${box('Uploaded & sample documents / ஆவணப்பட்டியல்','Compare the handwriting or supplier bill with the calculated figure. Then save a review note.',docsTable())}`;}
 function purchases(){const options=arr('purchases');return `${box('Supplier invoice review / சப்ளையர் பில்','Based on PA Traders, Maha Enterprises and Himalaya examples; invoice values are not current dues.',`<div class="table-scroll"><table><thead><tr><th>Supplier</th><th>Bill</th><th>Printed value</th><th>Pages</th><th>Status</th><th>Action</th></tr></thead><tbody>${options.map(p=>`<tr><td>${esc(p.supplier)}</td><td><b>${esc(p.invoice)}</b></td><td>${p.amount?money(p.amount):'Unknown'}</td><td>${esc(p.completeness)}</td><td>${pill(p.status)}</td><td>${(session.role==='Owner'||session.role==='Owner')&&p.status==='Review required'?`<button class="btn btn-mini" data-action="approve-purchase" data-id="${esc(p.id)}">Review & approve</button>`:p.status==='Part received'&&(session.role==='Owner'||session.role==='Owner')?`<button class="btn btn-mini btn-green" data-action="finish-grn" data-id="${esc(p.id)}">Complete receiving</button>`:'—'}</td></tr>`).join('')}</tbody></table></div>`)}<div class="notice"><b>Stock safety rule:</b> Invoice approval creates no warehouse quantity. Warehouse posts received goods separately with a GRN. Missing pages cannot be approved.</div>${session.role==='Owner'?box('Physical goods received / பொருள் வந்ததா?','Count actual stock by SKU and batch, not only the PDF.',grnForm()):''}`;}
