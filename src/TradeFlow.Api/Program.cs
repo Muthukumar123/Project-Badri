@@ -5,26 +5,65 @@ using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.ConfigureHttpJsonOptions(o=>o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
-builder.Services.AddDbContext<TradeDb>(o=>o.UseSqlite(builder.Configuration.GetConnectionString("TradeDb") ?? "Data Source=tradeflow.dev.db"));
+var development = builder.Environment.IsDevelopment();
+TradeIdentity.AddIdentity(builder);
+builder.Services.AddDbContext<TradeDb>(options =>
+{
+    if (development)
+        options.UseSqlite(builder.Configuration.GetConnectionString("TradeDb") ?? "Data Source=tradeflow.dev.db");
+    else
+    {
+        var connection = builder.Configuration.GetConnectionString("AzureSql");
+        if (string.IsNullOrWhiteSpace(connection))
+            throw new InvalidOperationException("Production requires ConnectionStrings:AzureSql, with a provisioned SQL schema.");
+        options.UseSqlServer(connection);
+    }
+});
 builder.Services.AddCors(o=>o.AddPolicy("local", p=>p.WithOrigins("http://localhost:5173").AllowAnyHeader().AllowAnyMethod()));
 var app = builder.Build();
-// Deliberate safety gate: this development-only identity can be forged and must never be deployed.
-if (!app.Environment.IsDevelopment()) throw new InvalidOperationException("OIDC not implemented: refusing to start outside Development.");
+// Production never trusts development headers. Authenticated access is required
+// and the business tenant is resolved from a membership row on the server.
+if (!development) app.UseAuthentication();
+app.UseAuthorization();
 app.UseCors("local");
 app.UseDefaultFiles();
 app.UseStaticFiles();
-using(var scope = app.Services.CreateScope()) scope.ServiceProvider.GetRequiredService<TradeDb>().Database.EnsureCreated();
-app.MapGet("/health",()=> Results.Ok(new{status="ok", mode="DEVELOPMENT_ONLY", product="Badri TradeFlow R1"}));
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<TradeDb>();
+    if (development)
+        db.Database.EnsureCreated();
+    else
+    {
+        // Fail closed until the production SQL schema has been provisioned.
+        // Do NOT call EnsureCreated() on a production financial database.
+        if (!db.Database.CanConnect())
+            throw new InvalidOperationException("Azure SQL is not accessible. Check identity, firewall and connection string.");
+        _ = db.TraderMemberships.AsNoTracking().Select(x => x.Id).Take(1).ToList();
+    }
+}
+app.MapGet("/auth/config", () => development
+    ? Results.Ok(new { mode = "development" })
+    : Results.Ok(new {
+        mode = "entra",
+        tenantId = builder.Configuration["AzureAd:TenantId"],
+        clientId = builder.Configuration["AzureAd:SpaClientId"],
+        scope = $"api://{builder.Configuration["AzureAd:ClientId"]}/access_as_user"
+    }));
+app.MapGet("/health",()=> Results.Ok(new{status="ok", mode=development ? "DEVELOPMENT_ONLY" : "SECURED", product="Badri TradeFlow R1"}));
 
 var api = app.MapGroup("/api/v1");
-api.AddEndpointFilter(async(ctx,next)=>{
-    var h=ctx.HttpContext.Request.Headers;
-    if (!Guid.TryParse(h["X-Dev-Tenant"],out Guid tenant) || string.IsNullOrWhiteSpace(h["X-Dev-User"]) ||
-        !Enum.TryParse<TraderRole>(h["X-Dev-Role"],true,out var role)) return Results.Unauthorized();
-    ctx.HttpContext.Items["actor"]=new Actor(tenant,h["X-Dev-User"].ToString(),role);
+if (!development) api.RequireAuthorization();
+api.AddEndpointFilter(async (ctx, next) =>
+{
+    var db = ctx.HttpContext.RequestServices.GetRequiredService<TradeDb>();
+    var actor = await TradeIdentity.ResolveActorAsync(ctx.HttpContext, db, builder.Configuration, development);
+    if (actor is null) return Results.Unauthorized();
+    ctx.HttpContext.Items["actor"] = actor;
     return await next(ctx);
 });
 
+api.MapGet("/me",(HttpContext h)=>{var a=Who(h);return Results.Ok(new{a.UserId,a.Role});});
 api.MapGet("/retailers",async(HttpContext h,TradeDb db)=>{
     var a=Who(h);return Results.Ok(await db.Retailers.Where(x=>x.TenantId==a.TenantId).OrderBy(x=>x.Name).ToListAsync());
 });
@@ -76,8 +115,8 @@ api.MapPost("/collections",async(HttpContext h,TradeDb db,CapturePayment req)=>{
 api.MapGet("/collections",async(HttpContext h,TradeDb db)=>{
     var a=Who(h);return Results.Ok(await db.Collections.Where(x=>x.TenantId==a.TenantId).OrderByDescending(x=>x.CapturedAtUtc).Take(200).ToListAsync());
 });
-// SIMULATION ONLY. In production verify payment with bank/provider evidence; screenshot is not proof.
-api.MapPost("/collections/{id:guid}/verify-demo",async(HttpContext h,TradeDb db,Guid id,VerifyDemo req)=>{
+// SIMULATION ONLY. Never map this endpoint outside local Development.
+if (development) api.MapPost("/collections/{id:guid}/verify-demo",async(HttpContext h,TradeDb db,Guid id,VerifyDemo req)=>{
     var a=Who(h);if(!Can(a,TraderRole.Owner,TraderRole.Accounts))return Results.Forbid();
     var payment=await db.Collections.FirstOrDefaultAsync(x=>x.TenantId==a.TenantId&&x.Id==id);
     if(payment==null)return Results.NotFound();

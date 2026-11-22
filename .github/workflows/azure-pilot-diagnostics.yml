@@ -1,0 +1,75 @@
+name: Diagnose Badri Azure App Service startup (read-only)
+
+on:
+  push:
+    branches:
+      - feature/azure-identity-and-deployment-foundation
+    paths:
+      - '.github/workflows/azure-pilot-diagnostics.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Authenticate to exact Azure directory and subscription
+        uses: azure/login@v2
+        with:
+          client-id: 0b055085-26ad-4dbb-817b-6ee7a6c2d52a
+          tenant-id: e40f632c-d3b5-415e-bc51-7a06c131e0dd
+          subscription-id: 36ed0aa4-e3dd-404b-b210-4a6e4dc38c74
+
+      - name: Read-only configuration, live site HTTP probe and App Service diagnostics
+        shell: bash
+        run: |
+          set -uo pipefail
+          RG=badritradersPOC
+          APP=badritraders
+          EXPECT=/subscriptions/36ed0aa4-e3dd-404b-b210-4a6e4dc38c74/resourceGroups/badritradersPOC/providers/Microsoft.Web/sites/badritraders
+          actual=$(az webapp show -g "$RG" -n "$APP" --query id -o tsv)
+          [[ "${actual,,}" == "${EXPECT,,}" ]] || { echo "::error::Wrong Azure resource"; exit 1; }
+          echo "--- TARGET / PUBLIC STATE ---"
+          az webapp show -g "$RG" -n "$APP" --query '{name:name,state:state,plan:serverFarmId,sku:sku,host:defaultHostName,httpsOnly:httpsOnly}' -o json
+          echo "--- RUNTIME (NO PASSWORDS) ---"
+          az webapp config show -g "$RG" -n "$APP" --query '{linuxFxVersion:linuxFxVersion,appCommandLine:appCommandLine,numberOfWorkers:numberOfWorkers,alwaysOn:alwaysOn}' -o json
+          echo "--- CONFIGURED APP SETTING NAMES ONLY (NO VALUES) ---"
+          az webapp config appsettings list -g "$RG" -n "$APP" --query '[].name' -o tsv | sort
+          host=$(az webapp show -g "$RG" -n "$APP" --query defaultHostName -o tsv)
+          echo "--- CURRENT PUBLIC HTTP RESPONSE ---"
+          for path in /health /; do
+            code=$(curl --max-time 20 -L -s -o /dev/null -w '%{http_code}' "https://$host$path") || true
+            echo "$path HTTP ${code:-unreachable}"
+          done
+          echo "--- AZURE STARTUP / WORKER DIAGNOSTIC ---"
+          timeout 65 az webapp log startup show -g "$RG" -n "$APP" 2>&1 | sed -E 's/(password|secret|token|apikey)[=:][^[:space:]]+/\1=[REDACTED]/Ig' | tail -70 || true
+          echo "--- AZURE TROUBLESHOOT SUMMARY ---"
+          timeout 65 az webapp troubleshoot status -g "$RG" -n "$APP" 2>&1 | sed -E 's/(password|secret|token|apikey)[=:][^[:space:]]+/\1=[REDACTED]/Ig' | tail -70 || true
+          echo "--- RECENT APP CONTAINER LOG DOWNLOAD (FILTERED) ---"
+          if timeout 75 az webapp log download -g "$RG" -n "$APP" --log-file "$RUNNER_TEMP/badri-diagnostic.zip" >/dev/null 2>&1; then
+            python3 - <<'PY'
+          import zipfile,glob,os,re
+          files=glob.glob(os.environ['RUNNER_TEMP']+'/badri-diagnostic.zip')
+          pats=('exception','failed','fatal','error','denied','unable','startup','badri.pilot','listen','bind')
+          if files and zipfile.is_zipfile(files[0]):
+              with zipfile.ZipFile(files[0]) as z:
+                  for item in z.namelist()[-15:]:
+                      if not (item.endswith('.log') or item.endswith('.txt')):continue
+                      try:
+                          raw=z.read(item)[-100000:].decode('utf-8','replace')
+                          rows=[line for line in raw.splitlines() if any(word in line.lower() for word in pats)][-18:]
+                          if rows:
+                              print('LOG FILE:',item)
+                              for line in rows:
+                                  line=re.sub(r'(?i)(password|secret|token|api.key)[=:]\S+',r'\1=[REDACTED]',line)
+                                  line=re.sub(r'(?i)(bearer\s+)[a-z0-9._~+/=-]+',r'\1[REDACTED]',line)
+                                  print(line[:350])
+                      except Exception as exc:print('Unable to inspect log file:',type(exc).__name__)
+          PY
+          else
+            echo 'No ZIP log download available; enable App Service application/container logging in Azure Portal.'
+          fi
+          echo "Diagnostics completed without modifying Azure resources or exposing password values."

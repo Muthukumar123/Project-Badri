@@ -10,3 +10,9 @@ dist/
 .vscode/
 .idea/
 .DS_Store
+
+# Temporary single-instance XML pilot secrets and state
+.env.pilot
+**/pilot-data.xml
+**/*.xml
+**/uploads/
