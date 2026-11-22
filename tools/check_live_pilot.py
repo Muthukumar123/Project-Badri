@@ -46,7 +46,8 @@ res = subprocess.run(
 config = {row["name"]: row.get("value") or "" for row in json.loads(res.stdout)}
 assert config.get("BADRI_XML_PATH") == "/home/badri-data/tradeflow.xml"
 for suffix, username, expected_role in ACCOUNTS:
-    secret = config.get("BADRI_PASS_" + suffix)
+    # The new portal key wins when configured; old SALESMAN key remains a fallback.
+    secret = (config.get("BADRI_PASS_SALESPERSON") or config.get("BADRI_PASS_SALESMAN")) if suffix == "SALESMAN" else config.get("BADRI_PASS_" + suffix)
     assert secret and len(secret) >= 14, "Missing/weak Azure account secret: " + suffix
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
     status, session = call("/api/auth/login", "POST", {"username": username,"password": secret}, opener)
