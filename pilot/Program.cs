@@ -200,7 +200,9 @@ api.MapPost("/orders",async(NewOrder req,HttpContext ctx,PilotStore s)=>await Ch
     "order.request",["Owner","Salesperson","Retailer"],d=>{
     var root=d.Root!;
     var shop=Role(ctx)=="Retailer"
-        ? root.Element("retailers")!.Elements("retailer").FirstOrDefault(x=>PilotStore.Attr(x,"name")=="Kumar Maligai")
+        ? PilotStore.ById(root.Element("retailers")!,
+            PilotStore.Attr(root.Element("users")!.Elements("user")
+                .FirstOrDefault(x=>PilotStore.Attr(x,"name")==Name(ctx)),"retailerId"))
         : PilotStore.ById(root.Element("retailers")!,req.RetailerId??"");
     if(shop is null)throw new InvalidOperationException("Select a valid retailer.");
     if(!CanAccessShop(root,ctx,PilotStore.Attr(shop,"id")))
