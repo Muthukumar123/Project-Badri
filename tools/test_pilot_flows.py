@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """R2 three-role XML pilot integration tests. Synthetic data only."""
 import http.cookiejar,json,os,urllib.request,urllib.error,uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
+INDIA_TODAY=datetime.now(ZoneInfo('Asia/Kolkata')).date().isoformat()
 BASE='http://127.0.0.1:5091'
 
 class User:
@@ -108,12 +111,21 @@ assert same['id']==cash['id']
 upi=sales.post('/collections',{'billId':bill['id'],'amount':200,'mode':'UPI','idempotencyKey':uuid.uuid4().hex})
 assert upi['status']=='Pending bank verification'
 assert float(owner.get('/state')['totals']['receivable'])==1100
-close=sales.post('/cashclose',{'date':'2026-11-22','counted':400,'reason':'','notes':{'200':2}})
+close=sales.post('/cashclose',{'date':INDIA_TODAY,'counted':400,'reason':'','notes':{'200':2}})
+sales.blocked('/cashclose',{'date':INDIA_TODAY,'counted':400,'reason':'','notes':{'200':2}},400)
 retailer.blocked('/cashclose/'+close['id']+'/approve',{'reason':'No'},403)
 owner.post('/cashclose/'+close['id']+'/approve',{'reason':'Counted and accepted by owner'})
 assert float(owner.get('/state')['totals']['receivable'])==700
 owner.post('/collections/'+upi['id']+'/bank-verify',{'reference':'SYNTHETIC-BANK-REF','reviewerNote':'Verified on pilot external bank report'})
 assert float(owner.get('/state')['totals']['receivable'])==500
+# Another electronic receipt must not reuse the bank evidence reference.
+upi2=sales.post('/collections',{'billId':bill['id'],'amount':50,'mode':'UPI',
+                              'idempotencyKey':uuid.uuid4().hex})
+owner.blocked('/collections/'+upi2['id']+'/bank-verify',
+              {'reference':'SYNTHETIC-BANK-REF','reviewerNote':'Duplicate statement reference'},400)
+owner.post('/collections/'+upi2['id']+'/bank-verify',
+           {'reference':'SYNTHETIC-UNIQUE-REF-2','reviewerNote':'Separate bank statement line reviewed'})
+assert float(owner.get('/state')['totals']['receivable'])==450
 owner.post('/returns',{'productId':sku,'qty':1,'reason':'Damaged, quarantine'})
 assert len(owner.get('/state')['returns'])==1
 assert 'purchases' not in retailer.get('/state') and 'suppliers' not in retailer.get('/state')
