@@ -96,6 +96,12 @@ function orderCards(){
 function orders(){
  if(session.role==='Owner')return `${box('Retailer orders / கடை ஆர்டர்',
    'Review before accepting. Accepting an order does NOT post an invoice or move stock.',orderCards())}
+   <details class="simple-details"><summary>➕ Record a phone order on behalf of a retailer</summary>
+   ${form('order',`${select('retailerId','Retailer / கடை',arr('retailers'))}
+   ${select('productId','Product / பொருள்',arr('products'))}
+   ${field('quantity','Quantity / எண்ணிக்கை','number','1')}
+   ${field('note','Optional note / குறிப்பு','text','',false)}`,
+   'Record request / ஆர்டர் பதிவு')}</details>
    ${box('Next steps / அடுத்து','Once accepted, record a bill, dispatch goods and get receiver acknowledgment.',
    `<div class="actions-grid">${quick('sales','🧾','Create sales bill','Select accepted order')}
    ${quick('delivery','🚚','Dispatch goods','Deduct warehouse stock')}
@@ -167,7 +173,13 @@ function retailer(){
  arr('collections').map(x=>`<div class="line"><b>${money(x.amount)}</b><span>${esc(x.mode)} ${pill(x.status)}</span></div>`).join('')||'<div class="empty-state">No receipts yet.</div>')}`;
 }
 
-async function submitForm(e){e.preventDefault();const formEl=e.currentTarget;const kind=formEl.dataset.form;const fd=new FormData(formEl);const object=Object.fromEntries(fd.entries());try{let path,body=object;
+async function submitForm(e){e.preventDefault();const formEl=e.currentTarget;
+ if(formEl.dataset.submitting==='1')return;
+ formEl.dataset.submitting='1';
+ const saveButton=formEl.querySelector('button[type="submit"]');
+ if(saveButton)saveButton.disabled=true;
+ const kind=formEl.dataset.form;const fd=new FormData(formEl);const object=Object.fromEntries(fd.entries());
+ try{let path,body=object;
   switch(kind){case'upload':path='/documents/upload';body=fd;break;
   case'retailer':path='/retailers';break;
   case'order':path='/orders';body={retailerId:object.retailerId||null,productId:object.productId,quantity:Number(object.quantity),note:object.note||''};break;
@@ -182,7 +194,8 @@ async function submitForm(e){e.preventDefault();const formEl=e.currentTarget;con
   default:throw Error('Unknown form');
  }
  await api(path,'POST',body);warn('Saved successfully / பதிவு செய்யப்பட்டது',true);await refresh();
- }catch(err){warn(err.message||String(err));}}
+ }catch(err){warn(err.message||String(err));}
+ finally{formEl.dataset.submitting='';if(saveButton)saveButton.disabled=false;}}
 async function clickAction(e){const {action,id,qty}=e.currentTarget.dataset;try{let url,body={};switch(action){
 case'order-accept':case'order-decline':url='/orders/'+id+'/decision';body={approve:action==='order-accept',note:action==='order-accept'?'Owner accepted request; check available stock before bill':prompt('Reason for decline / காரணம்:')||''};if(!body.approve&&!body.note.trim())return;break;
 case'view-rows':{const rows=await api('/documents/'+id+'/rows');if(!rows.length){warn('No source rows for this document.');return;}const table='<div class="table-scroll"><table><thead><tr><th>Bill</th><th>Retailer / Product</th><th>Amount</th><th>Paper note</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.bill||'—')+'</td><td>'+esc(r.shop)+'</td><td>'+money(r.amount)+'</td><td>'+esc(r.mark)+'</td></tr>').join('')+'</tbody></table></div>';const existing=document.getElementById('rowsPanel');if(existing)existing.remove();const el=document.createElement('section');el.id='rowsPanel';el.className='panel';el.innerHTML='<div class="row-wrap"><h2>Actual paper rows / அசல் வரிகள்</h2><button class="btn btn-mini btn-secondary" id="closeRows">Close</button></div><div class="notice">Transcribed from sample scans, unverified. No money is posted from these rows.</div>'+table;document.querySelector('main').insertBefore(el,document.querySelector('main .panel')||null);document.getElementById('closeRows').onclick=()=>el.remove();el.scrollIntoView({behavior:'smooth'});return;}
