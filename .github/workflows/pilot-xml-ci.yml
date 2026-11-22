@@ -30,6 +30,8 @@ jobs:
         run: test -s /tmp/badri-pilot/wwwroot/app.js && test -s /tmp/badri-pilot/Badri.Pilot.dll
       - name: Validate browser JavaScript parses
         run: node --check pilot/wwwroot/app.js
+      - name: Validate three role pages render without browser runtime errors
+        run: node tools/check_pilot_ui.mjs
       - name: Run authenticated smoke test with randomized credentials
         shell: bash
         run: |
