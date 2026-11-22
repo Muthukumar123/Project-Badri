@@ -38,6 +38,10 @@ if command=='prepare':
  tree.write(PATH,encoding='utf-8',xml_declaration=True)
  print('PASS: Created synthetic legacy six-login XML with historical receipt attribution')
 elif command=='migrated':
+ # PilotStore is lazy: /health deliberately does not initialize or mutate XML.
+ # First successful login initializes/migrates the old file.
+ for key,username in [('OWNER','owner'),('SALESMAN','salesperson'),('RETAILER','retailer')]:
+  assert login(username,os.environ['BADRI_PASS_'+key])==200,username
  tree=ET.parse(PATH);root=tree.getroot()
  users=root.find('users')
  names={x.get('name') for x in users}
@@ -46,8 +50,6 @@ elif command=='migrated':
  for node in root.iter():
   for key in ('by','preparedBy','approvedBy','reviewedBy','placedBy'):
    assert node.get(key) not in ('salesman.santhosh','owner.badri')
- for key,username in [('OWNER','owner'),('SALESMAN','salesperson'),('RETAILER','retailer')]:
-  assert login(username,os.environ['BADRI_PASS_'+key])==200,username
  for key,user in [('OWNER','owner.badri'),('SALESMAN','salesman.santhosh'),('RETAILER','retailer.demo')]:
   assert login(user,os.environ['BADRI_PASS_'+key])==401,user
  print('PASS: 6→3 role migration preserved XML, remapped actors and rejected legacy login names')
