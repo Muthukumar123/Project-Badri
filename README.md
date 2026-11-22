@@ -1,5 +1,26 @@
 # Badri TradeFlow SaaS — Independent Repository
 
+## Current deployed application — R2 XML pilot (22 Nov 2026)
+
+**Live pilot:** https://badritraders-hga6f6amdubqbhfb.southindia-01.azurewebsites.net/
+
+**Deployed feature branch:** `feature/azure-identity-and-deployment-foundation`.
+
+**Actual deployed project:** `pilot/Badri.Pilot.csproj` (ASP.NET Core 10, XML single-instance demo, integrated Tamil/English HTML/CSS/JS UI). The separate `src/TradeFlow.Api` and `web/` source trees described below are **unfinished development starters, NOT the Azure-deployed pilot**.
+
+**Exactly 3 role types:** `owner`, `salesperson`, `retailer`. Passwords are private Azure App Settings. This demo currently has only **one** salesperson account and **one** retailer example (Kumar Maligai); real customers need individual identities and beat/shop authorization.
+
+**Requirements and gap status:**
+- [Full approved functional scope — FR-01 through FR-25](docs/BADRI_TRADEFLOW_REQUIREMENTS_v2.0.md)
+- [Verified requirement coverage and missing-work matrix](docs/REQUIREMENTS_COVERAGE_AUDIT_2026-11-22.md)
+- [Three-role pilot walkthrough and password settings](docs/XML_PILOT_DEPLOYMENT.md)
+- [Successful Azure redeployment and login/browser smoke tests](https://github.com/Muthukumar123/Project-Badri/actions/runs/45018376731)
+
+**Important:** All 25 requirements are **tracked**, not completed. The Azure pilot uses synthetic/redacted examples and must not be mistaken for fully verified GST invoicing, production financial accounting, multi-tenant SaaS, or a completed document/OCR solution. Open engineering issues [#7–#13](https://github.com/Muthukumar123/Project-Badri/issues) define the remaining work. The sections below describe the **separate original scaffold**.
+
+---
+
+
 > **Status:** Initial **.NET 10/C# collections-first implementation scaffold**, not a production product. This is a **standalone** project; it has no dependency on `document-upload-processing` or BCS ONE.
 
 ## Why this code exists
