@@ -45,7 +45,9 @@ elif command=='migrated':
  tree=ET.parse(PATH);root=tree.getroot()
  users=root.find('users')
  names={x.get('name') for x in users}
- assert names==set(ROLE_NAMES),names
+ assert set(ROLE_NAMES).issubset(names),names
+ # Individual provisioned shop and salesperson accounts must not disappear on restart.
+ assert {'kuriji.test','gk.runner','bom.runner'}.issubset(names),names
  assert root.find('orders') is not None
  for node in root.iter():
   for key in ('by','preparedBy','approvedBy','reviewedBy','placedBy'):

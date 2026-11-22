@@ -77,6 +77,7 @@ jobs:
           print('Smoke test passed: owner login, seed references, no fabricated dues, anti-CSRF, persisted retailer')
           PY
           python3 "$GITHUB_WORKSPACE/tools/test_pilot_flows.py"
+          python3 "$GITHUB_WORKSPACE/tools/test_account_controls.py"
           # Reproduce upgrading a previously deployed six-account XML file.
           # Use test XML only; scripts never print or upload account secrets.
           kill "$PID" || true
