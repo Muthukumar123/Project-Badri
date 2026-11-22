@@ -273,17 +273,30 @@ api.MapPost("/documents/upload",async(HttpContext ctx,PilotStore s,IWebHostEnvir
         ext==".png"?header.Take(8).SequenceEqual(new byte[]{137,80,78,71,13,10,26,10}):
         header[0]==255&&header[1]==216&&header[2]==255;
     if(!valid)return Results.BadRequest(new{error="Uploaded file does not match its extension"});
+    // Fingerprint exact original bytes, independent of filename; atomic duplicate check
+    // is performed inside the XML transaction rather than only before it.
+    var sha256=Convert.ToHexString(await SHA256.HashDataAsync(input));
+    input.Position=0;
     var folder=Path.Combine(Path.GetDirectoryName(Path.GetFullPath(config["BADRI_XML_PATH"]??Path.Combine(env.ContentRootPath,"pilot-data.xml")))!,"uploads");
     Directory.CreateDirectory(folder);var id=PilotStore.Id();var stored=Path.Combine(folder,id+ext);
-    try{await using(var output=File.Create(stored))await input.CopyToAsync(output);
-        return await Change(ctx,s,"document.upload",["Owner","Salesperson"],d=>{
+    try{
+        await using(var output=File.Create(stored))await input.CopyToAsync(output);
+        var response=await s.Write(Name(ctx),"document.upload",d=>{
             var group=d.Root!.Element("documents")!;
+            if(group.Elements("document").Any(x=>PilotStore.Attr(x,"sha256")==sha256))
+                throw new InvalidOperationException("Identical source file already uploaded; open the existing document instead.");
             group.Add(PilotStore.Obj("document",("id",id),("title",Path.GetFileName(file.FileName)),("type",type),("claimed",""),
                 ("computed",""),("status","Review required"),("source","Uploaded file; manual verification"),
-                 ("uploadedBy",Name(ctx)),("path",id+ext)));
-            return new{id,status="Review required",message="Stored privately. Manual review is required; OCR is not enabled in this pilot."};
+                ("uploadedBy",Name(ctx)),("sha256",sha256),("fileSize",file.Length),("path",id+ext)));
+            return new{id,status="Review required",message="Saved for manual review. No amounts, bills or stock have been posted."};
         });
-    }catch{try{File.Delete(stored);}catch{}throw;}
+        return Results.Ok(response);
+    }
+    catch(InvalidOperationException ex){
+        try{File.Delete(stored);}catch{}
+        return Results.Conflict(new{error=ex.Message});
+    }
+    catch{try{File.Delete(stored);}catch{}throw;}
 });
 api.MapGet("/documents/{id}/file",async(string id,HttpContext ctx,PilotStore s,IConfiguration config,IWebHostEnvironment env)=>{
     if(!InRole(ctx,"Owner","Salesperson"))return Results.Forbid();
