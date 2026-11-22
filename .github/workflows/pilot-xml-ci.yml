@@ -28,6 +28,10 @@ jobs:
         run: dotnet publish pilot/Badri.Pilot.csproj -c Release -o /tmp/badri-pilot
       - name: Verify generated pilot includes UI
         run: test -s /tmp/badri-pilot/wwwroot/app.js && test -s /tmp/badri-pilot/Badri.Pilot.dll
+      - name: Validate browser JavaScript parses
+        run: node --check pilot/wwwroot/app.js
+      - name: Validate three role pages render without browser runtime errors
+        run: node tools/check_pilot_ui.mjs
       - name: Run authenticated smoke test with randomized credentials
         shell: bash
         run: |
@@ -35,7 +39,7 @@ jobs:
           export ASPNETCORE_ENVIRONMENT=Development
           export ASPNETCORE_URLS=http://127.0.0.1:5091
           export BADRI_XML_PATH="$RUNNER_TEMP/pilot-data.xml"
-          for role in OWNER ACCOUNTS WAREHOUSE SALESMAN RETAILER OPERATOR; do
+          for role in OWNER SALESMAN RETAILER; do
             export "BADRI_PASS_${role}=$(openssl rand -hex 18)"
           done
           cd /tmp/badri-pilot
@@ -54,12 +58,13 @@ jobs:
           base='http://127.0.0.1:5091'
           jar=http.cookiejar.CookieJar()
           opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-          req=urllib.request.Request(base+'/api/auth/login',data=json.dumps({'username':'owner.badri','password':os.environ['BADRI_PASS_OWNER']}).encode(),headers={'Content-Type':'application/json'},method='POST')
+          req=urllib.request.Request(base+'/api/auth/login',data=json.dumps({'username':'owner','password':os.environ['BADRI_PASS_OWNER']}).encode(),headers={'Content-Type':'application/json'},method='POST')
           login=json.load(opener.open(req))
           assert login['role']=='Owner'
           csrf=login['csrf']
           state=json.load(opener.open(base+'/api/state'))
           assert len(state['documents'])==7,state
+          assert len(state['orders'])==0
           assert len(state['purchases'])==4
           assert sum(float(x.get('amount') or 0) for x in state['bills'])==0
           assert any(x.get('claimed')=='166040' for x in state['documents'])
@@ -69,6 +74,31 @@ jobs:
           good=urllib.request.Request(base+'/api/retailers',data=json.dumps({'name':'Pilot Shop','beat':'Bommidi'}).encode(),headers={'Content-Type':'application/json','X-CSRF':csrf},method='POST')
           saved=json.load(opener.open(good))
           assert saved['name']=='Pilot Shop'
-          print('Smoke test passed: login, role, seed references, no fabricated dues, anti-CSRF, persisted retailer')
+          print('Smoke test passed: owner login, seed references, no fabricated dues, anti-CSRF, persisted retailer')
           PY
           python3 "$GITHUB_WORKSPACE/tools/test_pilot_flows.py"
+          # Reproduce upgrading a previously deployed six-account XML file.
+          # Use test XML only; scripts never print or upload account secrets.
+          kill "$PID" || true
+          wait "$PID" || true
+          python3 "$GITHUB_WORKSPACE/tools/test_three_role_migration.py" prepare
+          dotnet Badri.Pilot.dll > /tmp/badri-migration-log.txt 2>&1 &
+          PID=$!
+          for i in {1..25}; do
+            if curl -fsS http://127.0.0.1:5091/health >/dev/null; then break; fi
+            sleep 1
+          done
+          python3 "$GITHUB_WORKSPACE/tools/test_three_role_migration.py" migrated
+          # An Azure Portal password change triggers an App Service restart.
+          kill "$PID" || true
+          wait "$PID" || true
+          export PREVIOUS_BADRI_PASS_OWNER="$BADRI_PASS_OWNER"
+          export BADRI_PASS_OWNER=$(openssl rand -hex 20)
+          dotnet Badri.Pilot.dll > /tmp/badri-rotation-log.txt 2>&1 &
+          PID=$!
+          for i in {1..25}; do
+            if curl -fsS http://127.0.0.1:5091/health >/dev/null; then break; fi
+            sleep 1
+          done
+          python3 "$GITHUB_WORKSPACE/tools/test_three_role_migration.py" rotated
+

@@ -100,7 +100,7 @@ jobs:
           actual=$(az webapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" --query id -o tsv)
           [[ "${actual,,}" == "${EXPECTED_RESOURCE_ID,,}" ]] || { echo "::error::Resource mismatch"; exit 1; }
           present=$(az webapp config appsettings list -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" --query '[].name' -o tsv)
-          for role in OWNER ACCOUNTS WAREHOUSE SALESMAN RETAILER OPERATOR; do
+          for role in OWNER SALESMAN RETAILER; do
             name="BADRI_PASS_${role}"
             if ! grep -Fxq "$name" <<<"$present"; then
               # 40 random hex characters; no reuse across accounts.
@@ -132,7 +132,7 @@ jobs:
             exit 1
           fi
           settings=$(az webapp config appsettings list -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEBAPP_NAME" --query '[].name' -o tsv)
-          for name in BADRI_XML_PATH BADRI_PASS_OWNER BADRI_PASS_ACCOUNTS BADRI_PASS_WAREHOUSE BADRI_PASS_SALESMAN BADRI_PASS_RETAILER BADRI_PASS_OPERATOR ASPNETCORE_ENVIRONMENT; do
+          for name in BADRI_XML_PATH BADRI_PASS_OWNER BADRI_PASS_SALESMAN BADRI_PASS_RETAILER ASPNETCORE_ENVIRONMENT; do
             if ! grep -Fxq "$name" <<<"$settings"; then
               echo "::error::App Service setting $name is missing. Set passwords privately in Azure Portal."
               exit 1
@@ -162,14 +162,14 @@ jobs:
           ready=0
           for i in {1..24}; do
             if curl --max-time 15 -fsS "$url/health" -o "$RUNNER_TEMP/badri-health.json" \
-              && grep -Eq '"version"[[:space:]]*:[[:space:]]*"pilot-r1"' "$RUNNER_TEMP/badri-health.json"; then
+              && grep -Eq '"version"[[:space:]]*:[[:space:]]*"pilot-r2"' "$RUNNER_TEMP/badri-health.json"; then
               ready=1
               break
             fi
             sleep 10
           done
           if [[ "$ready" != 1 ]]; then
-            echo "::error::Deployed site did not pass /health pilot-r1 verification."
+            echo "::error::Deployed site did not pass /health pilot-r2 verification."
             exit 1
           fi
           curl --max-time 15 -fsS "$url/" | grep -q "Badri TradeFlow"
@@ -182,6 +182,6 @@ jobs:
           echo "Website: $url" >> "$GITHUB_STEP_SUMMARY"
           echo "Branch: feature/azure-identity-and-deployment-foundation" >> "$GITHUB_STEP_SUMMARY"
           echo "The seeded paper values are review-only examples, NOT posted financial balances." >> "$GITHUB_STEP_SUMMARY"
-      - name: Read-only live verification of six password-protected role logins
+      - name: Read-only live verification of owner, salesperson and retailer logins
         shell: bash
         run: python3 tools/check_live_pilot.py
